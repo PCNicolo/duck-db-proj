@@ -1,0 +1,2 @@
+[console_scripts]
+duckdb-cli = duckdb_analytics.cli:main
