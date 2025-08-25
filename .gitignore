@@ -12,4 +12,5 @@ docs/
 .bmad-core/
 .bmad-infrastructure-devops/
 __pycache__/
-
+.venv/
+data/

@@ -13,6 +13,7 @@ from src.duckdb_analytics.core.connection import DuckDBConnection
 from src.duckdb_analytics.core.query_engine import QueryEngine
 from src.duckdb_analytics.data.file_manager import FileManager
 from src.duckdb_analytics.llm.sql_generator import SQLGenerator
+from src.duckdb_analytics.llm.schema_extractor import SchemaExtractor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -86,7 +87,16 @@ if "db_connection" not in st.session_state:
     st.session_state.query_engine = QueryEngine(st.session_state.db_connection)
     st.session_state.file_manager = FileManager()
     st.session_state.sql_generator = SQLGenerator()
+    st.session_state.schema_extractor = SchemaExtractor(st.session_state.db_connection)
     st.session_state.registered_tables = []
+    
+    # Chat interface state management
+    st.session_state.chat_history = []
+    st.session_state.processing_query = False
+    st.session_state.last_query_time = 0
+    st.session_state.pending_query = None
+    st.session_state.schema_cache = None
+    st.session_state.schema_cache_time = 0
 
     # Auto-load existing data files from data/samples
     auto_load_data()
@@ -194,6 +204,8 @@ def preview_table(table_name: str, limit: int = 10):
 def sql_editor_tab():
     """SQL query editor interface."""
     st.header("SQL Query Editor")
+    
+    import time
 
     # Initialize chat history in session state if not present
     if "chat_history" not in st.session_state:
@@ -204,58 +216,91 @@ def sql_editor_tab():
     if len(st.session_state.chat_history) > MAX_CHAT_HISTORY:
         st.session_state.chat_history = st.session_state.chat_history[-MAX_CHAT_HISTORY:]
 
-    # Chat UI Component - Natural Language Interface
-    with st.container():
-        st.subheader("💬 Natural Language Query")
-
+    # Chat UI Component - Natural Language Interface (Single Container)
+    st.subheader("💬 Natural Language Query")
+    
+    # Create a form to prevent multiple submissions
+    with st.form(key="chat_form", clear_on_submit=True):
         # Chat input area
-        col_chat, col_send = st.columns([5, 1])
-        with col_chat:
-            user_query = st.text_input(
-                "Ask a question",
-                placeholder=(
-                    "Ask in plain English "
-                    "(e.g., 'Show me top 10 customers by revenue')"
-                ),
-                key="nl_query_input",
-                label_visibility="collapsed"
-            )
+        user_query = st.text_input(
+            "Ask a question",
+            placeholder=(
+                "Ask in plain English "
+                "(e.g., 'Show me top 10 customers by revenue')"
+            ),
+            key="nl_query_input_form",
+            label_visibility="collapsed"
+        )
+        
+        # Submit button inside form
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col2:
+            send_button = st.form_submit_button("Send", type="primary", use_container_width=True)
+        with col3:
+            clear_chat = st.form_submit_button("Clear Chat", use_container_width=True)
 
-        with col_send:
-            send_button = st.button("Send", type="primary", use_container_width=True)
-
-        # Process chat input
-        if (send_button or user_query) and user_query.strip():
-            # Validate input length (prevent potential DOS)
-            if len(user_query) > 1000:
-                st.error("Query too long. Please limit to 1000 characters.")
-            else:
-                # Add user message to chat history
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": user_query.strip()
-                })
-
-                # Generate SQL using LM Studio if available
-                if st.session_state.sql_generator.is_available():
-                    with st.spinner("Generating SQL..."):
-                        # Get table context if tables are registered
-                        table_context = None
-                        if st.session_state.registered_tables:
-                            table_names = [t["name"] for t in st.session_state.registered_tables]
-                            table_context = f"Available tables: {', '.join(table_names)}"
-                        
-                        # Format query with context
-                        formatted_query = st.session_state.sql_generator.format_query_with_context(
-                            user_query.strip(), table_context
+    # Clear chat history if requested
+    if clear_chat:
+        st.session_state.chat_history = []
+        st.rerun()
+    
+    # Process chat input with debouncing and state management
+    if send_button and user_query.strip():
+        current_time = time.time()
+        
+        # Debouncing: prevent queries within 1 second
+        if current_time - st.session_state.last_query_time < 1.0:
+            st.warning("⏱️ Please wait a moment before sending another query")
+        elif st.session_state.processing_query:
+            st.warning("⏳ Still processing previous query, please wait...")
+        elif len(user_query) > 1000:
+            st.error("Query too long. Please limit to 1000 characters.")
+        else:
+            # Set processing state
+            st.session_state.processing_query = True
+            st.session_state.last_query_time = current_time
+            
+            # Add user message to chat history
+            st.session_state.chat_history.append({
+                "role": "user",
+                "content": user_query.strip()
+            })
+            
+            # Generate SQL using LM Studio if available
+            if st.session_state.sql_generator.is_available():
+                with st.spinner("🤖 Generating SQL query..."):
+                    # Use cached schema if available and recent (cache for 5 minutes)
+                    schema_context = None
+                    if st.session_state.registered_tables:
+                        cache_age = current_time - st.session_state.schema_cache_time
+                        if st.session_state.schema_cache and cache_age < 300:
+                            schema_context = st.session_state.schema_cache
+                        else:
+                            # Refresh schema cache
+                            schema_context = st.session_state.schema_extractor.format_for_llm(
+                                include_samples=False, max_tables=20
+                            )
+                            st.session_state.schema_cache = schema_context
+                            st.session_state.schema_cache_time = current_time
+                    
+                    # Generate SQL with schema context
+                    try:
+                        generated_sql = st.session_state.sql_generator.generate_sql(
+                            user_query.strip(), schema_context
                         )
                         
-                        # Generate SQL
-                        try:
-                            generated_sql = st.session_state.sql_generator.generate_sql(formatted_query)
+                        if generated_sql:
+                            # Validate SQL against actual schema
+                            is_valid, validation_errors = st.session_state.schema_extractor.validate_sql(generated_sql)
                             
-                            if generated_sql:
-                                # Validate the generated SQL doesn't contain dangerous operations
+                            if not is_valid:
+                                # Show validation errors
+                                sql_response = f"-- ⚠️ Generated SQL has validation issues:\n"
+                                for error in validation_errors:
+                                    sql_response += f"-- {error}\n"
+                                sql_response += f"\n-- Generated SQL (needs correction):\n{generated_sql}"
+                            else:
+                                # Check for dangerous operations
                                 dangerous_keywords = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE']
                                 sql_upper = generated_sql.upper()
                                 
@@ -264,63 +309,70 @@ def sql_editor_tab():
                                     sql_response = f"-- ⚠️ Generated SQL contains potentially dangerous operations\n"
                                     sql_response += f"-- Please review carefully before execution:\n{generated_sql}"
                                 else:
-                                    sql_response = f"-- Generated from: {user_query[:100]}...\n{generated_sql}"
-                            else:
-                                sql_response = "-- Failed to generate SQL. Possible issues:\n"
-                                sql_response += "-- 1. LM Studio connection timeout (3 seconds)\n"
-                                sql_response += "-- 2. Model returned empty response\n"
-                                sql_response += "-- 3. Try rephrasing your query"
-                        except Exception as e:
-                            logger.error(f"Error generating SQL: {str(e)}")
-                            sql_response = f"-- Error generating SQL: {str(e)[:100]}"
+                                    sql_response = f"-- ✅ Valid SQL generated from: {user_query[:100]}...\n{generated_sql}"
+                        else:
+                            sql_response = "-- Failed to generate SQL. Possible issues:\n"
+                            sql_response += "-- 1. LM Studio connection timeout (10 seconds)\n"
+                            sql_response += "-- 2. Model returned empty response\n"
+                            sql_response += "-- 3. Try rephrasing your query"
+                    except Exception as e:
+                        logger.error(f"Error generating SQL: {str(e)}")
+                        sql_response = f"-- Error generating SQL: {str(e)[:100]}"
+            else:
+                # Fallback if LM Studio is not available
+                sql_response = f"-- Natural Language: {user_query[:200]}\n"  # Truncate for safety
+                sql_response += "-- LM Studio not available. Please ensure:\n"
+                sql_response += "-- 1. LM Studio is running on port 1234\n"
+                sql_response += "-- 2. A SQL-capable model is loaded\n"
+                sql_response += "-- See docs/LM_STUDIO_SETUP.md for instructions"
+
+            # Add SQL response to chat history
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": sql_response
+            })
+            
+            # Reset processing state
+            st.session_state.processing_query = False
+            
+            # Rerun to update UI (only once, after all processing is complete)
+            st.rerun()
+
+    # Chat History Display Area (Outside the form to prevent duplication)
+    if st.session_state.chat_history:
+        st.markdown("### Chat History")
+        
+        # Create a scrollable container for chat messages with height limit
+        chat_container = st.container(height=400)
+        with chat_container:
+            for idx, message in enumerate(st.session_state.chat_history):
+                if message["role"] == "user":
+                    # User message - right-aligned style
+                    col1, col2 = st.columns([1, 3])
+                    with col2:
+                        st.info(f"**You:** {message['content']}")
                 else:
-                    # Fallback if LM Studio is not available
-                    sql_response = f"-- Natural Language: {user_query[:200]}\n"  # Truncate for safety
-                    sql_response += "-- LM Studio not available. Please ensure:\n"
-                    sql_response += "-- 1. LM Studio is running on port 1234\n"
-                    sql_response += "-- 2. A SQL-capable model is loaded\n"
-                    sql_response += "-- See docs/LM_STUDIO_SETUP.md for instructions"
-
-                # Add SQL response to chat history
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": sql_response
-                })
-
-                # Clear the input field by rerunning the app
-                st.rerun()
-
-        # Chat History Display Area
-        if st.session_state.chat_history:
-            st.markdown("### Chat History")
-
-            # Create a scrollable container for chat messages
-            chat_container = st.container()
-            with chat_container:
-                for message in st.session_state.chat_history:
-                    if message["role"] == "user":
-                        # User message - right-aligned style
-                        with st.container():
-                            # Using columns for right alignment instead of unsafe HTML
-                            col1, col2 = st.columns([1, 2])
+                    # SQL response - left-aligned with code highlighting
+                    st.markdown("**🤖 SQL Assistant:**")
+                    st.code(message["content"], language="sql")
+                    
+                    # Add buttons for valid SQL queries
+                    if not message["content"].startswith("--") or "\n" in message["content"]:
+                        # Extract SQL (remove comments)
+                        sql_lines = [line for line in message["content"].split("\n") 
+                                   if not line.strip().startswith("--")]
+                        if sql_lines:
+                            clean_sql = "\n".join(sql_lines)
+                            col1, col2, col3 = st.columns([1, 1, 2])
+                            with col1:
+                                if st.button(f"📋 Copy to Editor", key=f"copy_{idx}"):
+                                    st.session_state.editor_sql = clean_sql
+                                    st.rerun()
                             with col2:
-                                st.info(f"**You:** {message['content']}")
-                    else:
-                        # SQL response - left-aligned with code highlighting
-                        with st.container():
-                            st.markdown("**SQL Query:**")
-                            st.code(message["content"], language="sql")
-                            
-                            # Add button to copy SQL to editor if it's a valid generated query
-                            if not message["content"].startswith("--") or "\n" in message["content"]:
-                                # Extract SQL (remove comments)
-                                sql_lines = [line for line in message["content"].split("\n") 
-                                           if not line.strip().startswith("--")]
-                                if sql_lines:
-                                    clean_sql = "\n".join(sql_lines)
-                                    if st.button(f"📋 Copy to Editor", key=f"copy_{st.session_state.chat_history.index(message)}"):
-                                        st.session_state.editor_sql = clean_sql
-                                        st.rerun()
+                                # Add button to execute directly if SQL is valid
+                                if "✅ Valid SQL" in message["content"]:
+                                    if st.button(f"▶️ Execute", key=f"exec_{idx}"):
+                                        execute_query(clean_sql)
 
     # Divider between chat and SQL editor
     st.divider()

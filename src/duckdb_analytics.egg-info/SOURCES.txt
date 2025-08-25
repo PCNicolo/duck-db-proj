@@ -13,3 +13,9 @@ src/duckdb_analytics/core/connection.py
 src/duckdb_analytics/core/query_engine.py
 src/duckdb_analytics/data/__init__.py
 src/duckdb_analytics/data/file_manager.py
+src/duckdb_analytics/llm/__init__.py
+src/duckdb_analytics/llm/config.py
+src/duckdb_analytics/llm/schema_extractor.py
+src/duckdb_analytics/llm/sql_generator.py
+tests/test_llm_integration.py
+tests/test_schema_extractor.py

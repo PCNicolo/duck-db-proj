@@ -5,7 +5,7 @@ LM_STUDIO_URL = "http://localhost:1234/v1"
 MODEL_NAME = "local-model"  # LM Studio uses "local-model" as identifier
 
 # Request settings
-REQUEST_TIMEOUT = 3.0  # 3 second timeout as per requirements
+REQUEST_TIMEOUT = 10.0  # Increased timeout for complex queries and slower models
 MAX_TOKENS = 500
 TEMPERATURE = 0.1  # Low temperature for consistent SQL generation
 
