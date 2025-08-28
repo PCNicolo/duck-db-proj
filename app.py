@@ -358,21 +358,50 @@ def sql_editor_tab():
                     
                     # Add buttons for valid SQL queries
                     if not message["content"].startswith("--") or "\n" in message["content"]:
-                        # Extract SQL (remove comments)
-                        sql_lines = [line for line in message["content"].split("\n") 
-                                   if not line.strip().startswith("--")]
-                        if sql_lines:
-                            clean_sql = "\n".join(sql_lines)
-                            col1, col2, col3 = st.columns([1, 1, 2])
-                            with col1:
-                                if st.button(f"📋 Copy to Editor", key=f"copy_{idx}"):
-                                    st.session_state.editor_sql = clean_sql
-                                    st.rerun()
-                            with col2:
-                                # Add button to execute directly if SQL is valid
-                                if "✅ Valid SQL" in message["content"]:
-                                    if st.button(f"▶️ Execute", key=f"exec_{idx}"):
-                                        execute_query(clean_sql)
+                        # Extract SQL (remove comments) with defensive programming
+                        try:
+                            # Safely get message content with fallback
+                            content = message.get("content", "")
+                            if not content:
+                                logger.warning(f"Empty message content at index {idx}")
+                                continue
+                            
+                            # Extract SQL lines safely
+                            sql_lines = [line for line in content.split("\n") 
+                                       if not line.strip().startswith("--")]
+                            
+                            if sql_lines:
+                                clean_sql = "\n".join(sql_lines)
+                                # Validate clean_sql is not empty after joining
+                                if clean_sql and clean_sql.strip():
+                                    col1, col2, col3 = st.columns([1, 1, 2])
+                                    with col1:
+                                        if st.button(f"📋 Copy to Editor", key=f"copy_{idx}"):
+                                            try:
+                                                # Defensive check before setting session state
+                                                if clean_sql and isinstance(clean_sql, str):
+                                                    st.session_state.editor_sql = clean_sql
+                                                    st.success("✅ SQL copied to editor")
+                                                    st.rerun()
+                                                else:
+                                                    st.error("⚠️ Unable to copy: Invalid SQL content")
+                                                    logger.error(f"Invalid SQL content type: {type(clean_sql)}")
+                                            except Exception as e:
+                                                st.error(f"❌ Failed to copy SQL: {str(e)}")
+                                                logger.error(f"Copy to editor failed: {str(e)}", exc_info=True)
+                                    
+                                    with col2:
+                                        # Add button to execute directly if SQL is valid
+                                        if "✅ Valid SQL" in content:
+                                            if st.button(f"▶️ Execute", key=f"exec_{idx}"):
+                                                try:
+                                                    execute_query(clean_sql)
+                                                except Exception as e:
+                                                    st.error(f"❌ Execution failed: {str(e)}")
+                                                    logger.error(f"Query execution failed: {str(e)}", exc_info=True)
+                        except Exception as e:
+                            logger.error(f"Error processing message at index {idx}: {str(e)}", exc_info=True)
+                            st.error(f"⚠️ Unable to process SQL from message")
 
     # Divider between chat and SQL editor
     st.divider()
