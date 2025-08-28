@@ -90,7 +90,7 @@ class TestSchemaIntegration:
         assert len(sales_schema.columns) == 5
         
         # Verify column names
-        column_names = [col['name'] for col in sales_schema.columns]
+        column_names = [col.name if hasattr(col, 'name') else col['name'] for col in sales_schema.columns]
         assert 'sale_id' in column_names
         assert 'customer_id' in column_names
         assert 'amount' in column_names
@@ -211,6 +211,13 @@ class TestSchemaIntegration:
         # First extraction
         schema1 = extractor.get_schema()
         assert extractor._schema_cache is not None
+        initial_count = len(schema1)
+        
+        # Get schema again without changes - should use cache
+        with patch.object(extractor, '_extract_schema') as mock_extract:
+            schema2 = extractor.get_schema()
+            mock_extract.assert_not_called()  # Should use cache
+            assert len(schema2) == initial_count
         
         # Add a new table
         test_db_connection.execute("""
@@ -221,15 +228,16 @@ class TestSchemaIntegration:
             )
         """)
         
-        # Second extraction without force refresh - should return cached
-        schema2 = extractor.get_schema()
-        assert 'orders' not in schema2
-        assert len(schema2) == 3
+        # The enhanced cache detects table changes and auto-invalidates
+        # This is the new, correct behavior
+        schema3 = extractor.get_schema()
+        assert 'orders' in schema3  # Cache was invalidated, new table appears
+        assert len(schema3) == initial_count + 1
         
-        # Force refresh to get new schema
-        schema3 = extractor.get_schema(force_refresh=True)
-        assert 'orders' in schema3
-        assert len(schema3) == 4
+        # Force refresh to ensure it still works
+        schema4 = extractor.get_schema(force_refresh=True)
+        assert 'orders' in schema4
+        assert len(schema4) == initial_count + 1
     
     def test_column_extraction_for_table(self, test_db_connection):
         """Test extracting columns for a specific table."""

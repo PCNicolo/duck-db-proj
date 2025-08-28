@@ -210,6 +210,6 @@ class TestConfig:
         """Test that configuration values are set correctly."""
         assert LM_STUDIO_URL == "http://localhost:1234/v1"
         assert MODEL_NAME == "local-model"
-        assert REQUEST_TIMEOUT == 3.0
+        assert REQUEST_TIMEOUT == 10.0  # Updated timeout for complex queries
         assert "SQL expert" in SQL_SYSTEM_PROMPT
         assert "DuckDB" in SQL_SYSTEM_PROMPT

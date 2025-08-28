@@ -1,8 +1,11 @@
 """DuckDB schema extraction and caching for LLM context."""
 
+import hashlib
+import json
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -10,26 +13,71 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TableSchema:
-    """Represents schema information for a database table."""
+class ColumnInfo:
+    """Detailed column information."""
     name: str
-    columns: List[Dict[str, str]] = field(default_factory=list)
+    data_type: str
+    is_nullable: bool = True
+    is_primary_key: bool = False
+    is_unique: bool = False
+    default_value: Optional[str] = None
+    column_position: int = 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'type': self.data_type,
+            'nullable': self.is_nullable,
+            'primary_key': self.is_primary_key,
+            'unique': self.is_unique,
+            'default': self.default_value,
+            'position': self.column_position
+        }
+
+
+@dataclass
+class ForeignKeyRelation:
+    """Foreign key relationship information."""
+    from_table: str
+    from_column: str
+    to_table: str
+    to_column: str
+    constraint_name: Optional[str] = None
+    
+    def __str__(self) -> str:
+        return f"{self.from_table}.{self.from_column} -> {self.to_table}.{self.to_column}"
+
+
+@dataclass
+class TableSchema:
+    """Enhanced schema information for a database table."""
+    name: str
+    columns: List[ColumnInfo] = field(default_factory=list)
     row_count: Optional[int] = None
-    sample_data: Optional[pd.DataFrame] = None
+    sample_data: Optional[List[List[Any]]] = None
+    foreign_keys: List[ForeignKeyRelation] = field(default_factory=list)
+    indexes: List[Dict[str, Any]] = field(default_factory=list)
+    cardinality_stats: Dict[str, int] = field(default_factory=dict)
 
 
 class SchemaExtractor:
     """Extracts and caches DuckDB schema information for LLM context."""
 
-    def __init__(self, duckdb_conn):
+    def __init__(self, duckdb_conn, cache_ttl: int = 3600, sample_rows: int = 3):
         """
-        Initialize the schema extractor.
+        Initialize the enhanced schema extractor.
         
         Args:
             duckdb_conn: DuckDB connection object or DuckDBConnection instance
+            cache_ttl: Cache time-to-live in seconds (default: 1 hour)
+            sample_rows: Number of sample rows to extract (default: 3)
         """
         self.conn = duckdb_conn
         self._schema_cache: Optional[Dict[str, TableSchema]] = None
+        self._cache_timestamp: Optional[float] = None
+        self._cache_key: Optional[str] = None
+        self.cache_ttl = cache_ttl
+        self.sample_rows = sample_rows
         self._raw_schema_df: Optional[pd.DataFrame] = None
 
     def get_schema(self, force_refresh: bool = False) -> Dict[str, TableSchema]:
@@ -42,9 +90,64 @@ class SchemaExtractor:
         Returns:
             Dictionary of table names to TableSchema objects
         """
-        if not self._schema_cache or force_refresh:
-            self._schema_cache = self._extract_schema()
+        # Check if cache is valid
+        if not force_refresh and self._is_cache_valid():
+            logger.debug("Using cached schema")
+            return self._schema_cache
+            
+        # Extract fresh schema
+        logger.info("Extracting fresh schema")
+        self._schema_cache = self._extract_schema()
+        self._cache_timestamp = time.time()
+        self._update_cache_key()
         return self._schema_cache
+    
+    def _is_cache_valid(self) -> bool:
+        """Check if the schema cache is still valid."""
+        if not self._schema_cache or not self._cache_timestamp:
+            return False
+            
+        # Check TTL
+        if time.time() - self._cache_timestamp > self.cache_ttl:
+            logger.debug("Cache expired based on TTL")
+            return False
+            
+        # Check if tables have changed (basic check)
+        try:
+            current_tables = self._get_table_list()
+            cached_tables = set(self._schema_cache.keys())
+            if set(current_tables) != cached_tables:
+                logger.debug("Table list changed, invalidating cache")
+                return False
+        except Exception as e:
+            logger.debug(f"Error checking table list: {e}")
+            return False
+            
+        return True
+    
+    def _get_table_list(self) -> List[str]:
+        """Get list of tables in the database."""
+        query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        if hasattr(self.conn, 'execute'):
+            result = self.conn.execute(query)
+            df = result.fetchdf() if hasattr(result, 'fetchdf') else pd.DataFrame(result.fetchall())
+        else:
+            df = self.conn.execute(query).df()
+        return df['table_name'].tolist() if not df.empty else []
+    
+    def _update_cache_key(self):
+        """Update the cache key based on current schema."""
+        if not self._schema_cache:
+            self._cache_key = None
+            return
+            
+        # Create a hash of table names and their column counts
+        cache_data = {
+            table: len(schema.columns) 
+            for table, schema in self._schema_cache.items()
+        }
+        cache_str = json.dumps(cache_data, sort_keys=True)
+        self._cache_key = hashlib.md5(cache_str.encode()).hexdigest()
 
     def _extract_schema(self) -> Dict[str, TableSchema]:
         """
@@ -56,7 +159,8 @@ class SchemaExtractor:
         schema_dict = {}
 
         try:
-            # Query information schema for all tables and columns
+            # Enhanced query with more metadata
+            # Note: Simplified query due to DuckDB constraint metadata limitations
             query = """
             SELECT 
                 table_name, 
@@ -90,18 +194,26 @@ class SchemaExtractor:
                 # Create TableSchema object
                 table_schema = TableSchema(name=table_name)
 
-                # Add column information
+                # Add enhanced column information
                 for _, row in table_df.iterrows():
-                    column_info = {
-                        'name': row['column_name'],
-                        'type': row['data_type'],
-                        'nullable': row['is_nullable'] == 'YES',
-                        'default': row['column_default']
-                    }
+                    # Check if column is a primary key (simple heuristic for now)
+                    is_pk = 'id' in row['column_name'].lower() and row['ordinal_position'] == 1
+                    is_unique = 'email' in row['column_name'].lower() or is_pk
+                    
+                    column_info = ColumnInfo(
+                        name=row['column_name'],
+                        data_type=row['data_type'],
+                        is_nullable=row['is_nullable'] == 'YES',
+                        is_primary_key=is_pk,
+                        is_unique=is_unique,
+                        default_value=row['column_default'],
+                        column_position=int(row['ordinal_position'])
+                    )
                     table_schema.columns.append(column_info)
 
-                # Try to get row count (may fail for views)
+                # Get table statistics and sample data
                 try:
+                    # Row count
                     count_query = f"SELECT COUNT(*) as cnt FROM {table_name}"
                     if hasattr(self.conn, 'execute'):
                         count_result = self.conn.execute(count_query)
@@ -110,8 +222,62 @@ class SchemaExtractor:
                     else:
                         count_result = self.conn.execute(count_query).df()
                         table_schema.row_count = int(count_result.iloc[0]['cnt'])
+                    
+                    # Sample data (if table has rows)
+                    if table_schema.row_count and table_schema.row_count > 0:
+                        sample_query = f"SELECT * FROM {table_name} LIMIT {self.sample_rows}"
+                        if hasattr(self.conn, 'execute'):
+                            sample_result = self.conn.execute(sample_query)
+                            sample_df = sample_result.fetchdf() if hasattr(sample_result, 'fetchdf') else pd.DataFrame(sample_result.fetchall())
+                        else:
+                            sample_df = self.conn.execute(sample_query).df()
+                        
+                        if not sample_df.empty:
+                            # Convert to list of lists for easier serialization
+                            table_schema.sample_data = sample_df.values.tolist()
+                    
+                    # Get cardinality statistics for key columns
+                    for col in table_schema.columns:
+                        if col.is_primary_key or col.is_unique or 'id' in col.name.lower():
+                            try:
+                                card_query = f"SELECT COUNT(DISTINCT {col.name}) as card FROM {table_name}"
+                                if hasattr(self.conn, 'execute'):
+                                    card_result = self.conn.execute(card_query)
+                                    card_df = card_result.fetchdf() if hasattr(card_result, 'fetchdf') else pd.DataFrame(card_result.fetchall())
+                                    if not card_df.empty:
+                                        table_schema.cardinality_stats[col.name] = int(card_df.iloc[0]['card'])
+                                else:
+                                    card_df = self.conn.execute(card_query).df()
+                                    if not card_df.empty:
+                                        table_schema.cardinality_stats[col.name] = int(card_df.iloc[0]['card'])
+                            except Exception as e:
+                                logger.debug(f"Could not get cardinality for {table_name}.{col.name}: {e}")
+                                
                 except Exception as e:
-                    logger.debug(f"Could not get row count for {table_name}: {e}")
+                    logger.debug(f"Could not get statistics for {table_name}: {e}")
+                
+                # Try to extract foreign key relationships (simplified for now)
+                # Note: DuckDB's constraint metadata API is limited, using heuristics
+                try:
+                    # Common foreign key patterns
+                    for col in table_schema.columns:
+                        if col.name.endswith('_id') and col.name != 'id':
+                            # This looks like a foreign key
+                            ref_table = col.name[:-3]  # Remove '_id' suffix
+                            if ref_table + 's' in schema_dict:  # Check plural form
+                                ref_table = ref_table + 's'
+                            
+                            fk = ForeignKeyRelation(
+                                from_table=table_name,
+                                from_column=col.name,
+                                to_table=ref_table,
+                                to_column='id'
+                            )
+                            table_schema.foreign_keys.append(fk)
+                            logger.debug(f"Inferred FK: {fk}")
+                    
+                except Exception as e:
+                    logger.debug(f"Could not infer foreign keys for {table_name}: {e}")
 
                 schema_dict[table_name] = table_schema
 
@@ -123,13 +289,15 @@ class SchemaExtractor:
 
         return schema_dict
 
-    def format_for_llm(self, include_samples: bool = False, max_tables: int = 50) -> str:
+    def format_for_llm(self, include_samples: bool = True, max_tables: int = 50, 
+                       context_level: str = 'standard') -> str:
         """
-        Format schema information for LLM context.
+        Format enhanced schema information for LLM context.
         
         Args:
             include_samples: Whether to include sample data
             max_tables: Maximum number of tables to include
+            context_level: 'minimal', 'standard', or 'comprehensive'
             
         Returns:
             Formatted string representation of schema
@@ -139,7 +307,7 @@ class SchemaExtractor:
         if not schema:
             return "No tables available in database."
 
-        formatted_parts = []
+        formatted_parts = ["## Database Schema\n"]
         table_count = 0
 
         for table_name, table_schema in schema.items():
@@ -147,18 +315,72 @@ class SchemaExtractor:
                 formatted_parts.append(f"\n... and {len(schema) - max_tables} more tables")
                 break
 
-            # Format table header
+            # Format table header with statistics
             row_info = f" ({table_schema.row_count:,} rows)" if table_schema.row_count is not None else ""
-            formatted_parts.append(f"\nTable: {table_name}{row_info}")
+            formatted_parts.append(f"\n### Table: {table_name}{row_info}")
 
-            # Format columns
-            column_strs = []
+            # Format columns with enhanced information
+            formatted_parts.append("Columns:")
             for col in table_schema.columns:
-                nullable = "" if col.get('nullable', True) else " NOT NULL"
-                column_strs.append(f"  - {col['name']} ({col['type']}{nullable})")
-
-            formatted_parts.append("\n".join(column_strs))
+                # Build column description
+                col_desc = f"  - {col.name}: {col.data_type}"
+                
+                # Add constraints
+                constraints = []
+                if col.is_primary_key:
+                    constraints.append("PRIMARY KEY")
+                if col.is_unique:
+                    constraints.append("UNIQUE")
+                if not col.is_nullable:
+                    constraints.append("NOT NULL")
+                if col.default_value:
+                    constraints.append(f"DEFAULT {col.default_value}")
+                
+                if constraints:
+                    col_desc += f" [{', '.join(constraints)}]"
+                
+                # Add cardinality info if available
+                if col.name in table_schema.cardinality_stats and context_level == 'comprehensive':
+                    card = table_schema.cardinality_stats[col.name]
+                    col_desc += f" (cardinality: {card:,})"
+                
+                formatted_parts.append(col_desc)
+            
+            # Add foreign key relationships if available
+            if table_schema.foreign_keys and context_level in ['standard', 'comprehensive']:
+                formatted_parts.append("\nRelationships:")
+                for fk in table_schema.foreign_keys:
+                    formatted_parts.append(f"  - {fk}")
+            
+            # Add sample data if requested
+            if include_samples and table_schema.sample_data and context_level != 'minimal':
+                formatted_parts.append("\nSample Data:")
+                # Get column names
+                col_names = [col.name for col in table_schema.columns]
+                formatted_parts.append(f"  {' | '.join(col_names)}")
+                formatted_parts.append(f"  {'-' * (len(' | '.join(col_names)))}")
+                
+                for row in table_schema.sample_data[:self.sample_rows]:
+                    # Format row values, handling None and truncating long strings
+                    formatted_values = []
+                    for val in row:
+                        if val is None:
+                            formatted_values.append('NULL')
+                        elif isinstance(val, str) and len(val) > 50:
+                            formatted_values.append(val[:47] + '...')
+                        else:
+                            formatted_values.append(str(val))
+                    formatted_parts.append(f"  {' | '.join(formatted_values)}")
+            
             table_count += 1
+
+        # Add query hints if comprehensive
+        if context_level == 'comprehensive':
+            formatted_parts.append("\n## Query Guidelines:")
+            formatted_parts.append("- Use appropriate JOINs based on relationships")
+            formatted_parts.append("- Consider NULL values in WHERE clauses")
+            formatted_parts.append("- Use indexes on primary/unique columns for performance")
+            formatted_parts.append("- Apply LIMIT clauses for safety")
 
         return "\n".join(formatted_parts)
 
@@ -287,7 +509,7 @@ class SchemaExtractor:
                     break
 
         if table_schema:
-            return [col['name'] for col in table_schema.columns]
+            return [col.name for col in table_schema.columns]
         return []
 
     def get_sample_data(self, table_name: str, limit: int = 5) -> Optional[pd.DataFrame]:
@@ -311,3 +533,16 @@ class SchemaExtractor:
         except Exception as e:
             logger.debug(f"Could not get sample data for {table_name}: {e}")
             return None
+    
+    def invalidate_cache(self):
+        """Manually invalidate the schema cache."""
+        self._schema_cache = None
+        self._cache_timestamp = None
+        self._cache_key = None
+        logger.info("Schema cache invalidated")
+    
+    def warm_cache(self):
+        """Warm the cache by pre-loading schema."""
+        logger.info("Warming schema cache...")
+        self.get_schema(force_refresh=True)
+        logger.info(f"Schema cache warmed with {len(self._schema_cache)} tables")
