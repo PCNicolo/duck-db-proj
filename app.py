@@ -438,12 +438,27 @@ def sql_editor_tab():
                                 logger.warning(f"Empty message content at index {idx}")
                                 continue
                             
-                            # Extract SQL lines safely
-                            sql_lines = [line for line in content.split("\n") 
-                                       if not line.strip().startswith("--")]
+                            # Extract SQL lines safely - improved logic
+                            sql_lines = []
+                            for line in content.split("\n"):
+                                line_stripped = line.strip()
+                                # Skip pure comment lines
+                                if line_stripped.startswith("--"):
+                                    continue
+                                # Handle lines that may have inline comments
+                                elif line_stripped:
+                                    # Check if line contains inline comment
+                                    if "--" in line:
+                                        # Extract the SQL part before the comment
+                                        sql_part = line.split("--")[0].rstrip()
+                                        if sql_part.strip():
+                                            sql_lines.append(sql_part)
+                                    else:
+                                        # No comment, add the whole line
+                                        sql_lines.append(line)
                             
                             if sql_lines:
-                                clean_sql = "\n".join(sql_lines)
+                                clean_sql = "\n".join(sql_lines).strip()
                                 # Validate clean_sql is not empty after joining
                                 if clean_sql and clean_sql.strip():
                                     col1, col2, col3 = st.columns([1, 1, 2])
@@ -453,7 +468,9 @@ def sql_editor_tab():
                                                 # Defensive check before setting session state
                                                 if clean_sql and isinstance(clean_sql, str):
                                                     st.session_state.editor_sql = clean_sql
-                                                    st.success("✅ SQL copied to editor")
+                                                    # Show what was copied for debugging
+                                                    st.success(f"✅ SQL copied to editor: {clean_sql[:100]}...")
+                                                    logger.info(f"Copied SQL to editor: {clean_sql}")
                                                     st.rerun()
                                                 else:
                                                     st.error("⚠️ Unable to copy: Invalid SQL content")
@@ -487,19 +504,20 @@ def sql_editor_tab():
             ["Custom", "SELECT ALL", "COUNT", "GROUP BY", "JOIN", "WINDOW"]
         )
 
-        if template != "Custom":
-            query = get_query_template(template)
-        else:
-            query = ""
-
     with col1:
-        # SQL editor - check if we need to populate from chat with defensive programming
+        # Initialize current_sql in session state if not exists
+        if "current_sql" not in st.session_state:
+            st.session_state.current_sql = ""
+        
+        # Check if we have SQL from the chat to transfer
         if "editor_sql" in st.session_state and st.session_state.editor_sql:
             # Safely retrieve and validate editor_sql
             try:
                 transferred_sql = st.session_state.editor_sql
                 if transferred_sql and isinstance(transferred_sql, str) and transferred_sql.strip():
-                    query = transferred_sql
+                    st.session_state.current_sql = transferred_sql.strip()
+                    # Display info that SQL was transferred
+                    st.info(f"📋 SQL copied from chat: {st.session_state.current_sql[:50]}...")
                     # Clear the editor_sql after successful transfer
                     st.session_state.editor_sql = None
                 else:
@@ -508,12 +526,18 @@ def sql_editor_tab():
             except Exception as e:
                 logger.error(f"Error retrieving editor_sql: {str(e)}", exc_info=True)
                 st.session_state.editor_sql = None
-            
+        # Check template selection
+        elif template != "Custom" and template:
+            st.session_state.current_sql = get_query_template(template)
+        
+        # Text area that updates the session state
         sql_query = st.text_area(
             "Enter SQL Query",
-            value=query,
+            value=st.session_state.current_sql,
             height=200,
-            placeholder="SELECT * FROM table_name LIMIT 100"
+            placeholder="SELECT * FROM table_name LIMIT 100",
+            key="sql_editor",
+            on_change=lambda: setattr(st.session_state, 'current_sql', st.session_state.sql_editor)
         )
 
     # Query execution
@@ -1708,6 +1732,17 @@ def execute_query(query: str, use_streaming: bool = True):
     try:
         import time
         
+        # Validate and clean the query
+        if not query or not query.strip():
+            st.error("❌ Query is empty")
+            return
+        
+        # Clean up the query - remove any extra whitespace
+        query = query.strip()
+        
+        # Log the query for debugging
+        logger.info(f"Executing query: {query}")
+        
         # Estimate query time for progress indication
         estimated_time = st.session_state.optimized_executor.estimate_query_time(query)
         
@@ -1755,9 +1790,30 @@ def execute_query(query: str, use_streaming: bool = True):
             
             st.success(f"✅ Query executed successfully in {execution_time:.3f}s")
     except Exception as e:
-        # Enhanced error handling
-        st.error(f"❌ Query failed:")
-        st.error(str(e))
+        # Enhanced error handling with more details
+        error_msg = str(e)
+        logger.error(f"Query execution failed: {error_msg}")
+        logger.error(f"Failed query: {query}")
+        
+        st.error("❌ Query failed:")
+        st.error(error_msg)
+        
+        # Provide helpful suggestions based on error type
+        if "Catalog Error" in error_msg or "does not exist" in error_msg:
+            st.info("💡 Suggestions:")
+            st.info("• Check table names (case-sensitive)")
+            st.info("• Verify column names exist")
+            st.info("• Use the schema explorer to see available tables")
+        elif "Parser Error" in error_msg or "syntax" in error_msg.lower():
+            st.info("💡 Suggestions:")
+            st.info("• Check SQL syntax")
+            st.info("• Remove any invalid characters")
+            st.info("• Ensure quotes are properly closed")
+        else:
+            st.info("💡 Unknown error occurred")
+            st.info("Suggestions:")
+            st.info("• Check query syntax")
+            st.info("• Verify table and column names")
 
 def explain_query(query: str):
     """Explain query execution plan."""
