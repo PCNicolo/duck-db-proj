@@ -1,0 +1,35 @@
+# Create .claudeignore in your project root
+cat > .claudeignore << 'EOF'
+# Exclude BMAD internal files from @ search
+.bmad-core/tasks/
+.bmad-core/agents/
+.bmad-core/templates/
+.bmad-core/checklists/
+.bmad-core/workflows/
+.bmad-core/data/
+
+# Keep only essential BMAD files visible
+!.bmad-core/core-config.yaml
+
+# Exclude Python cache and build files
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Exclude virtual environments
+venv/
+.venv/
+ENV/
+
+# Keep your actual project files visible
+!src/
+!docs/
+!tests/
+!*.py
+!*.md
+!*.yaml
+!*.yml
+EOF
