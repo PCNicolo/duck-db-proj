@@ -11,7 +11,7 @@ class ChartConfigurationPanel:
     
     def __init__(self):
         self.color_schemes = [
-            'default', 'viridis', 'plasma', 'inferno', 'magma', 'cividis',
+            'viridis', 'plasma', 'inferno', 'magma', 'cividis',
             'blues', 'reds', 'greens', 'purples', 'oranges', 'greys',
             'plotly', 'set1', 'set2', 'set3', 'pastel1', 'pastel2'
         ]
@@ -90,7 +90,7 @@ class ChartConfigurationPanel:
             config['color_scheme'] = st.selectbox(
                 "Color Scheme",
                 self.color_schemes,
-                index=self.color_schemes.index(current_config.get('color_scheme', 'default'))
+                index=self.color_schemes.index(current_config.get('color_scheme', 'viridis'))
                 if current_config.get('color_scheme') in self.color_schemes else 0,
                 key="color_scheme"
             )

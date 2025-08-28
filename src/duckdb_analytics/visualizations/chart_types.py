@@ -27,9 +27,44 @@ def create_heatmap(df: pd.DataFrame, x: str, y: str, values: str,
     """Create a heatmap visualization."""
     config = config or {}
     
-    # Create pivot table for heatmap
-    pivot_df = df.pivot_table(index=y, columns=x, values=values, 
-                             aggfunc=config.get('aggregation', 'mean'))
+    # Handle potential issues with column names that might be reserved or problematic
+    try:
+        # Make a copy to avoid modifying the original dataframe
+        df_copy = df.copy()
+        
+        # Reset index if necessary to avoid multi-index issues
+        if isinstance(df_copy.index, pd.MultiIndex):
+            df_copy = df_copy.reset_index()
+        
+        # Ensure the required columns exist
+        if x not in df_copy.columns:
+            raise ValueError(f"Column '{x}' not found in dataframe")
+        if y not in df_copy.columns:
+            raise ValueError(f"Column '{y}' not found in dataframe")
+        if values not in df_copy.columns:
+            raise ValueError(f"Column '{values}' not found in dataframe")
+        
+        # Create pivot table for heatmap
+        pivot_df = df_copy.pivot_table(index=y, columns=x, values=values, 
+                                       aggfunc=config.get('aggregation', 'mean'))
+        
+        # Handle empty pivot table
+        if pivot_df.empty:
+            raise ValueError("Pivot table resulted in empty dataframe")
+            
+    except Exception as e:
+        # Fallback to a simple error message if pivot fails
+        import streamlit as st
+        st.error(f"Error creating heatmap: {str(e)}")
+        # Create a minimal figure with error message
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Unable to create heatmap: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        fig.update_layout(height=config.get('height', 500))
+        return fig
     
     fig = go.Figure(data=go.Heatmap(
         z=pivot_df.values,

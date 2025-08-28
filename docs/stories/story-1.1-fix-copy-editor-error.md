@@ -123,6 +123,8 @@ The copy-to-editor functionality currently experiences intermittent NoneType err
 - Root cause identified: Missing null checks in message content extraction (app.py:360-375)
 - Session state not properly initialized for editor_sql and query_result
 - Missing defensive programming in query_result access points
+- Additional bug fixed: Invalid 'default' colorscale in heatmap visualization (configuration_panel.py:14)
+- Additional bug fixed: 'Grouper for period not 1-dimensional' error in pivot_table (chart_types.py:31)
 
 ### Completion Notes
 - Fixed NoneType error by adding comprehensive null checks and defensive programming
@@ -130,10 +132,15 @@ The copy-to-editor functionality currently experiences intermittent NoneType err
 - Added try-catch blocks with user-friendly error messages
 - Created test suite with 9 passing tests covering all edge cases
 - Improved user experience with success notifications and clear error messages
+- Fixed heatmap colorscale error by removing invalid 'default' option
+- Added defensive programming to heatmap creation to handle edge cases
 
 ### File List
 - `/app.py` - Modified with defensive programming and error handling
 - `/tests/test_copy_to_editor.py` - Created comprehensive test suite
+- `/src/duckdb_analytics/visualizations/configuration_panel.py` - Fixed colorscale options
+- `/src/duckdb_analytics/visualizations/chart_types.py` - Added defensive programming for heatmap
+- `/tests/test_chart_bugs.py` - Created tests for bug fixes
 
 ### Change Log
 1. Added null checks and validation for message content extraction (app.py:359-404)
@@ -141,6 +148,10 @@ The copy-to-editor functionality currently experiences intermittent NoneType err
 3. Improved editor_sql transfer mechanism with defensive checks (app.py:428-443)
 4. Added defensive checks for query_result access (app.py:464-476, 568-581)
 5. Created comprehensive test suite with 9 test cases
+6. Removed invalid 'default' colorscale from ChartConfigurationPanel (configuration_panel.py:13-17)
+7. Changed default colorscale from 'default' to 'viridis' (configuration_panel.py:93)
+8. Added defensive programming to create_heatmap function (chart_types.py:31-67)
+9. Created comprehensive test suite for chart bug fixes (test_chart_bugs.py)
 
 ### Status
 ✅ **Ready for Review** - All tasks completed, tests passing, no regressions identified
