@@ -1,31 +1,36 @@
 """Analytics Template System for DuckDB Analytics Dashboard."""
 
-import json
 import time
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Any, Optional, Union
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional, Union
+
 
 class ParameterType(Enum):
     """Parameter types for template parameters."""
+
     COLUMN = "column"
-    SELECT = "select" 
+    SELECT = "select"
     NUMBER = "number"
     TEXT = "text"
     BOOLEAN = "boolean"
     DATE = "date"
 
+
 class ColumnFilter(Enum):
     """Column filter types."""
+
     ALL = "all"
     NUMERIC = "numeric"
     TEXT = "text"
     DATE = "date"
     BOOLEAN = "boolean"
 
+
 @dataclass
 class TemplateParameter:
     """Template parameter definition."""
+
     name: str
     type: ParameterType
     label: str
@@ -37,9 +42,11 @@ class TemplateParameter:
     min_value: Optional[float] = None
     max_value: Optional[float] = None
 
+
 @dataclass
 class TemplateMetadata:
     """Template metadata and configuration."""
+
     name: str
     category: str
     description: str
@@ -51,130 +58,151 @@ class TemplateMetadata:
     requires_numeric_columns: bool = False
     requires_date_columns: bool = False
     min_rows: int = 0
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = time.time()
 
+
 class AnalyticsTemplate:
     """Analytics template for generating SQL queries with parameters."""
-    
+
     def __init__(self, metadata: TemplateMetadata, query_template: str):
         self.metadata = metadata
         self.query_template = query_template
-        
+
     def generate_query(self, params: Dict[str, Any], table_name: str) -> str:
         """Generate SQL query from template with parameters."""
         # Prepare parameters for template substitution
         template_params = params.copy()
-        template_params['table'] = table_name
-        
+        template_params["table"] = table_name
+
         # Validate required parameters
         for param in self.metadata.parameters:
             if param.required and param.name not in params:
                 raise ValueError(f"Required parameter '{param.name}' is missing")
-                
+
         try:
             # Use format string substitution
             query = self.query_template.format(**template_params)
             return query.strip()
         except KeyError as e:
             raise ValueError(f"Template parameter error: {e}")
-            
-    def validate_parameters(self, params: Dict[str, Any], available_columns: List[Dict[str, Any]]) -> List[str]:
+
+    def validate_parameters(
+        self, params: Dict[str, Any], available_columns: List[Dict[str, Any]]
+    ) -> List[str]:
         """Validate parameters against available columns and constraints."""
         errors = []
-        
+
         for param in self.metadata.parameters:
             value = params.get(param.name)
-            
+
             # Check required parameters
             if param.required and value is None:
                 errors.append(f"Parameter '{param.name}' is required")
                 continue
-                
+
             if value is None:
                 continue
-                
+
             # Validate column parameters
             if param.type == ParameterType.COLUMN:
-                column_names = [col['name'] for col in available_columns]
+                column_names = [col["name"] for col in available_columns]
                 if value not in column_names:
                     errors.append(f"Column '{value}' does not exist")
                 else:
                     # Check column filter
                     if param.column_filter:
-                        col_info = next((col for col in available_columns if col['name'] == value), None)
-                        if col_info and not self._matches_column_filter(col_info, param.column_filter):
-                            errors.append(f"Column '{value}' does not match filter '{param.column_filter.value}'")
-                            
+                        col_info = next(
+                            (col for col in available_columns if col["name"] == value),
+                            None,
+                        )
+                        if col_info and not self._matches_column_filter(
+                            col_info, param.column_filter
+                        ):
+                            errors.append(
+                                f"Column '{value}' does not match filter '{param.column_filter.value}'"
+                            )
+
             # Validate select parameters
             elif param.type == ParameterType.SELECT:
                 if param.options and value not in param.options:
-                    errors.append(f"Value '{value}' not in allowed options: {param.options}")
-                    
+                    errors.append(
+                        f"Value '{value}' not in allowed options: {param.options}"
+                    )
+
             # Validate numeric parameters
             elif param.type == ParameterType.NUMBER:
                 try:
                     num_value = float(value)
                     if param.min_value is not None and num_value < param.min_value:
-                        errors.append(f"Value {num_value} is below minimum {param.min_value}")
+                        errors.append(
+                            f"Value {num_value} is below minimum {param.min_value}"
+                        )
                     if param.max_value is not None and num_value > param.max_value:
-                        errors.append(f"Value {num_value} is above maximum {param.max_value}")
+                        errors.append(
+                            f"Value {num_value} is above maximum {param.max_value}"
+                        )
                 except (ValueError, TypeError):
                     errors.append(f"Parameter '{param.name}' must be a number")
-                    
+
         return errors
-    
-    def _matches_column_filter(self, column_info: Dict[str, Any], filter_type: ColumnFilter) -> bool:
+
+    def _matches_column_filter(
+        self, column_info: Dict[str, Any], filter_type: ColumnFilter
+    ) -> bool:
         """Check if column matches filter type."""
-        col_type = column_info.get('type', '').lower()
-        
+        col_type = column_info.get("type", "").lower()
+
         if filter_type == ColumnFilter.NUMERIC:
-            return any(t in col_type for t in ['int', 'float', 'double', 'decimal', 'numeric'])
+            return any(
+                t in col_type for t in ["int", "float", "double", "decimal", "numeric"]
+            )
         elif filter_type == ColumnFilter.TEXT:
-            return any(t in col_type for t in ['varchar', 'text', 'string', 'char'])
+            return any(t in col_type for t in ["varchar", "text", "string", "char"])
         elif filter_type == ColumnFilter.DATE:
-            return any(t in col_type for t in ['date', 'time', 'timestamp'])
+            return any(t in col_type for t in ["date", "time", "timestamp"])
         elif filter_type == ColumnFilter.BOOLEAN:
-            return 'bool' in col_type
-            
+            return "bool" in col_type
+
         return True  # ALL filter
-        
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert template to dictionary."""
         return {
-            'metadata': asdict(self.metadata),
-            'query_template': self.query_template
+            "metadata": asdict(self.metadata),
+            "query_template": self.query_template,
         }
-        
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'AnalyticsTemplate':
+    def from_dict(cls, data: Dict[str, Any]) -> "AnalyticsTemplate":
         """Create template from dictionary."""
-        metadata_dict = data['metadata']
-        
+        metadata_dict = data["metadata"]
+
         # Convert parameters
         parameters = []
-        for param_dict in metadata_dict.get('parameters', []):
+        for param_dict in metadata_dict.get("parameters", []):
             param_dict = param_dict.copy()
-            if 'type' in param_dict:
-                param_dict['type'] = ParameterType(param_dict['type'])
-            if 'column_filter' in param_dict and param_dict['column_filter']:
-                param_dict['column_filter'] = ColumnFilter(param_dict['column_filter'])
+            if "type" in param_dict:
+                param_dict["type"] = ParameterType(param_dict["type"])
+            if "column_filter" in param_dict and param_dict["column_filter"]:
+                param_dict["column_filter"] = ColumnFilter(param_dict["column_filter"])
             parameters.append(TemplateParameter(**param_dict))
-            
-        metadata_dict['parameters'] = parameters
+
+        metadata_dict["parameters"] = parameters
         metadata = TemplateMetadata(**metadata_dict)
-        
-        return cls(metadata, data['query_template'])
+
+        return cls(metadata, data["query_template"])
+
 
 class TemplateLibrary:
     """Library of analytics templates."""
-    
+
     def __init__(self):
         self.templates: Dict[str, AnalyticsTemplate] = {}
         self._load_builtin_templates()
-        
+
     def _load_builtin_templates(self):
         """Load built-in analytics templates."""
         templates = [
@@ -185,15 +213,15 @@ class TemplateLibrary:
             self._create_correlation_matrix_template(),
             self._create_pivot_table_template(),
         ]
-        
+
         for template in templates:
             self.add_template(template)
-    
+
     def _create_time_series_template(self) -> AnalyticsTemplate:
         """Create time series analysis template."""
         metadata = TemplateMetadata(
             name="Time Series Analysis",
-            category="temporal", 
+            category="temporal",
             description="Analyze trends over time with customizable time granularity",
             tags=["time", "trend", "temporal"],
             requires_date_columns=True,
@@ -203,14 +231,14 @@ class TemplateLibrary:
                     type=ParameterType.COLUMN,
                     label="Date Column",
                     description="Column containing date/timestamp values",
-                    column_filter=ColumnFilter.DATE
+                    column_filter=ColumnFilter.DATE,
                 ),
                 TemplateParameter(
                     name="metric_column",
                     type=ParameterType.COLUMN,
-                    label="Metric Column", 
+                    label="Metric Column",
                     description="Numeric column to analyze over time",
-                    column_filter=ColumnFilter.NUMERIC
+                    column_filter=ColumnFilter.NUMERIC,
                 ),
                 TemplateParameter(
                     name="granularity",
@@ -218,11 +246,11 @@ class TemplateLibrary:
                     label="Time Granularity",
                     description="Time period for aggregation",
                     options=["day", "week", "month", "quarter", "year"],
-                    default="month"
-                )
-            ]
+                    default="month",
+                ),
+            ],
         )
-        
+
         query = """
         SELECT 
             DATE_TRUNC('{granularity}', {date_column}) as period,
@@ -236,9 +264,9 @@ class TemplateLibrary:
         GROUP BY period
         ORDER BY period
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-    
+
     def _create_cohort_analysis_template(self) -> AnalyticsTemplate:
         """Create cohort analysis template."""
         metadata = TemplateMetadata(
@@ -252,14 +280,14 @@ class TemplateLibrary:
                     name="user_id_column",
                     type=ParameterType.COLUMN,
                     label="User ID Column",
-                    description="Column containing user identifiers"
+                    description="Column containing user identifiers",
                 ),
                 TemplateParameter(
-                    name="event_date_column", 
+                    name="event_date_column",
                     type=ParameterType.COLUMN,
                     label="Event Date Column",
                     description="Column containing event dates",
-                    column_filter=ColumnFilter.DATE
+                    column_filter=ColumnFilter.DATE,
                 ),
                 TemplateParameter(
                     name="cohort_period",
@@ -267,11 +295,11 @@ class TemplateLibrary:
                     label="Cohort Period",
                     description="Time period for cohort grouping",
                     options=["week", "month", "quarter"],
-                    default="month"
-                )
-            ]
+                    default="month",
+                ),
+            ],
         )
-        
+
         query = """
         WITH cohorts AS (
             SELECT 
@@ -291,11 +319,11 @@ class TemplateLibrary:
         GROUP BY cohort_period, period
         ORDER BY cohort_period, period
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-        
+
     def _create_funnel_analysis_template(self) -> AnalyticsTemplate:
-        """Create funnel analysis template.""" 
+        """Create funnel analysis template."""
         metadata = TemplateMetadata(
             name="Funnel Analysis",
             category="conversion",
@@ -306,36 +334,36 @@ class TemplateLibrary:
                     name="user_id_column",
                     type=ParameterType.COLUMN,
                     label="User ID Column",
-                    description="Column containing user identifiers"
+                    description="Column containing user identifiers",
                 ),
                 TemplateParameter(
                     name="event_column",
                     type=ParameterType.COLUMN,
                     label="Event Column",
-                    description="Column containing event names/types"
+                    description="Column containing event names/types",
                 ),
                 TemplateParameter(
                     name="step1_event",
                     type=ParameterType.TEXT,
                     label="Step 1 Event",
-                    description="First step event name"
+                    description="First step event name",
                 ),
                 TemplateParameter(
                     name="step2_event",
                     type=ParameterType.TEXT,
-                    label="Step 2 Event", 
-                    description="Second step event name"
+                    label="Step 2 Event",
+                    description="Second step event name",
                 ),
                 TemplateParameter(
                     name="step3_event",
                     type=ParameterType.TEXT,
                     label="Step 3 Event",
                     description="Third step event name",
-                    required=False
-                )
-            ]
+                    required=False,
+                ),
+            ],
         )
-        
+
         query = """
         WITH funnel_events AS (
             SELECT 
@@ -372,9 +400,9 @@ class TemplateLibrary:
         WHERE step1_count > 0 AND step2_count > 0 AND step3_count > 0
         ORDER BY step_number
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-    
+
     def _create_distribution_analysis_template(self) -> AnalyticsTemplate:
         """Create distribution analysis template."""
         metadata = TemplateMetadata(
@@ -389,20 +417,20 @@ class TemplateLibrary:
                     type=ParameterType.COLUMN,
                     label="Metric Column",
                     description="Numeric column to analyze",
-                    column_filter=ColumnFilter.NUMERIC
+                    column_filter=ColumnFilter.NUMERIC,
                 ),
                 TemplateParameter(
                     name="bins",
                     type=ParameterType.NUMBER,
-                    label="Number of Bins", 
+                    label="Number of Bins",
                     description="Number of bins for histogram",
                     default=10,
                     min_value=5,
-                    max_value=100
-                )
-            ]
+                    max_value=100,
+                ),
+            ],
         )
-        
+
         query = """
         WITH stats AS (
             SELECT 
@@ -439,14 +467,14 @@ class TemplateLibrary:
         FROM histogram
         ORDER BY bin_start
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-    
+
     def _create_correlation_matrix_template(self) -> AnalyticsTemplate:
         """Create correlation matrix template."""
         metadata = TemplateMetadata(
             name="Correlation Matrix",
-            category="statistical", 
+            category="statistical",
             description="Calculate correlation coefficients between numeric columns",
             tags=["correlation", "relationship", "matrix"],
             requires_numeric_columns=True,
@@ -455,11 +483,11 @@ class TemplateLibrary:
                     name="columns",
                     type=ParameterType.TEXT,
                     label="Columns (comma-separated)",
-                    description="Comma-separated list of numeric columns to correlate"
+                    description="Comma-separated list of numeric columns to correlate",
                 )
-            ]
+            ],
         )
-        
+
         # Note: This is a simplified version - full correlation matrix would require dynamic SQL
         query = """
         SELECT 
@@ -469,9 +497,9 @@ class TemplateLibrary:
         FROM {table}
         WHERE {columns} IS NOT NULL
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-    
+
     def _create_pivot_table_template(self) -> AnalyticsTemplate:
         """Create pivot table template."""
         metadata = TemplateMetadata(
@@ -484,20 +512,20 @@ class TemplateLibrary:
                     name="row_column",
                     type=ParameterType.COLUMN,
                     label="Row Column",
-                    description="Column to use for rows"
+                    description="Column to use for rows",
                 ),
                 TemplateParameter(
-                    name="col_column", 
+                    name="col_column",
                     type=ParameterType.COLUMN,
                     label="Column Column",
-                    description="Column to use for columns"
+                    description="Column to use for columns",
                 ),
                 TemplateParameter(
                     name="value_column",
                     type=ParameterType.COLUMN,
                     label="Value Column",
                     description="Column to aggregate",
-                    column_filter=ColumnFilter.NUMERIC
+                    column_filter=ColumnFilter.NUMERIC,
                 ),
                 TemplateParameter(
                     name="aggregation",
@@ -505,11 +533,11 @@ class TemplateLibrary:
                     label="Aggregation Function",
                     description="Function to aggregate values",
                     options=["SUM", "AVG", "COUNT", "MIN", "MAX"],
-                    default="SUM"
-                )
-            ]
+                    default="SUM",
+                ),
+            ],
         )
-        
+
         query = """
         SELECT 
             {row_column},
@@ -522,86 +550,98 @@ class TemplateLibrary:
         GROUP BY {row_column}, {col_column}
         ORDER BY {row_column}, {col_column}
         """
-        
+
         return AnalyticsTemplate(metadata, query)
-    
+
     def add_template(self, template: AnalyticsTemplate):
         """Add template to library."""
         self.templates[template.metadata.name] = template
-        
+
     def get_template(self, name: str) -> Optional[AnalyticsTemplate]:
         """Get template by name."""
         return self.templates.get(name)
-        
+
     def list_templates(self, category: Optional[str] = None) -> List[AnalyticsTemplate]:
         """List all templates, optionally filtered by category."""
         templates = list(self.templates.values())
         if category:
             templates = [t for t in templates if t.metadata.category == category]
         return templates
-        
+
     def get_categories(self) -> List[str]:
         """Get all unique categories."""
         return list(set(t.metadata.category for t in self.templates.values()))
 
+
 class TemplateEngine:
     """Template execution engine."""
-    
+
     def __init__(self, query_engine, db_connection):
         self.query_engine = query_engine
         self.db_connection = db_connection
         self.library = TemplateLibrary()
-        
-    def execute_template(self, template_name: str, parameters: Dict[str, Any], 
-                        table_name: str) -> Dict[str, Any]:
+
+    def execute_template(
+        self, template_name: str, parameters: Dict[str, Any], table_name: str
+    ) -> Dict[str, Any]:
         """Execute analytics template with parameters."""
         template = self.library.get_template(template_name)
         if not template:
             raise ValueError(f"Template '{template_name}' not found")
-            
+
         # Get table info for validation
         table_info = self.db_connection.get_table_info(table_name)
-        columns = table_info.get('columns', [])
-        
+        columns = table_info.get("columns", [])
+
         # Validate parameters
         errors = template.validate_parameters(parameters, columns)
         if errors:
             raise ValueError(f"Parameter validation failed: {'; '.join(errors)}")
-            
+
         # Check template requirements
         if template.metadata.requires_numeric_columns:
-            numeric_cols = [col for col in columns 
-                          if any(t in col.get('type', '').lower() 
-                               for t in ['int', 'float', 'double', 'decimal', 'numeric'])]
+            numeric_cols = [
+                col
+                for col in columns
+                if any(
+                    t in col.get("type", "").lower()
+                    for t in ["int", "float", "double", "decimal", "numeric"]
+                )
+            ]
             if not numeric_cols:
                 raise ValueError("Template requires numeric columns but none found")
-                
+
         if template.metadata.requires_date_columns:
-            date_cols = [col for col in columns
-                        if any(t in col.get('type', '').lower()
-                             for t in ['date', 'time', 'timestamp'])]
+            date_cols = [
+                col
+                for col in columns
+                if any(
+                    t in col.get("type", "").lower()
+                    for t in ["date", "time", "timestamp"]
+                )
+            ]
             if not date_cols:
                 raise ValueError("Template requires date columns but none found")
-                
+
         # Generate and execute query
         query = template.generate_query(parameters, table_name)
-        
+
         try:
             result_df = self.query_engine.execute_query(query)
-            
+
             return {
-                'success': True,
-                'data': result_df,
-                'query': query,
-                'template': template.metadata.name,
-                'parameters': parameters,
-                'row_count': len(result_df)
+                "success": True,
+                "data": result_df,
+                "query": query,
+                "template": template.metadata.name,
+                "parameters": parameters,
+                "row_count": len(result_df),
             }
         except Exception as e:
             return {
-                'success': False,
-                'error': str(e),
-                'query': query,
-                'template': template.metadata.name,
-                'parameters': parameters
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "template": template.metadata.name,
+                "parameters": parameters,
             }
