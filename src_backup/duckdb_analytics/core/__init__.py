@@ -1,0 +1,1 @@
+"""Core DuckDB functionality."""
