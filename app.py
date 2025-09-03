@@ -22,7 +22,7 @@ import sys
 sys.path.append('src')
 from duckdb_analytics.core.connection import DuckDBConnection
 from duckdb_analytics.core.query_engine import QueryEngine
-from duckdb_analytics.llm.sql_generator import SQLGenerator
+from duckdb_analytics.llm.enhanced_sql_generator import EnhancedSQLGenerator
 from duckdb_analytics.llm.schema_extractor import SchemaExtractor
 from duckdb_analytics.visualizations.recommendation_engine import ChartRecommendationEngine
 
@@ -46,7 +46,12 @@ if "schema_extractor" not in st.session_state:
     st.session_state.schema_extractor = SchemaExtractor(st.session_state.db_connection)
 
 if "sql_generator" not in st.session_state:
-    st.session_state.sql_generator = SQLGenerator(schema_extractor=st.session_state.schema_extractor)
+    # Initialize EnhancedSQLGenerator with the DuckDB connection
+    st.session_state.sql_generator = EnhancedSQLGenerator(
+        duckdb_conn=st.session_state.db_connection.connection,
+        base_url="http://localhost:1234/v1",
+        warm_cache=False
+    )
 
 if "chart_recommender" not in st.session_state:
     st.session_state.chart_recommender = ChartRecommendationEngine()
