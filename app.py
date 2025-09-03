@@ -12,6 +12,10 @@ from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
 from typing import Optional, Dict, Any, List
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Import our modules
 import sys
@@ -58,6 +62,12 @@ if "current_sql" not in st.session_state:
 
 if "data_loaded" not in st.session_state:
     st.session_state.data_loaded = False
+
+if "query_explanation" not in st.session_state:
+    st.session_state.query_explanation = None
+
+if "nl_query" not in st.session_state:
+    st.session_state.nl_query = ""
 
 def load_all_data_files():
     """Automatically load all CSV and Parquet files from the data directory."""
@@ -180,7 +190,7 @@ def process_uploaded_file(uploaded_file):
         
         # Get table info
         info = st.session_state.db_connection.get_table_info(table_name)
-        rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}")[0][0]
+        rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
         
         st.session_state.registered_tables.append({
             "name": table_name,
@@ -193,13 +203,24 @@ def process_uploaded_file(uploaded_file):
         return False
 
 def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
-    """Generate SQL from natural language using LM Studio."""
+    """Generate SQL from natural language using LM Studio with enhanced explanations."""
     if not st.session_state.sql_generator.is_available():
         st.warning("LM Studio is not available. Please ensure it's running on localhost:1234")
         return None
     
     try:
-        sql = st.session_state.sql_generator.generate_sql(prompt)
+        # Generate SQL with enhanced explanation and LLM feedback
+        sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
+            prompt,
+            include_llm_feedback=True,
+            return_metrics=True
+        )
+        
+        # Store the explanation in session state for display
+        if sql and "explanation" in metadata:
+            st.session_state.query_explanation = metadata["explanation"]
+            st.session_state.nl_query = prompt
+        
         return sql
     except Exception as e:
         st.error(f"Error generating SQL: {e}")
@@ -209,6 +230,35 @@ def execute_query(sql: str) -> Optional[pd.DataFrame]:
     """Execute SQL query and return results as DataFrame."""
     try:
         result = st.session_state.query_engine.execute_query(sql)
+        
+        # If we have an explanation and a result, provide feedback for learning
+        if (hasattr(st.session_state, 'query_explanation') and 
+            st.session_state.query_explanation and 
+            hasattr(st.session_state, 'nl_query') and 
+            st.session_state.nl_query and
+            isinstance(result, pd.DataFrame)):
+            
+            # Create execution summary for feedback
+            execution_summary = {
+                "rows_returned": len(result),
+                "columns": list(result.columns),
+                "success": True
+            }
+            
+            # Request feedback with execution results
+            if hasattr(st.session_state.sql_generator, 'query_explainer'):
+                try:
+                    feedback = st.session_state.sql_generator.query_explainer.get_llm_feedback(
+                        sql_query=sql,
+                        natural_language_query=st.session_state.nl_query,
+                        execution_result={"summary": f"Query returned {len(result)} rows with columns: {', '.join(result.columns)}"}
+                    )
+                    if feedback:
+                        # Store feedback for future use
+                        st.session_state.last_execution_feedback = feedback
+                except Exception as e:
+                    logger.debug(f"Could not get execution feedback: {e}")
+        
         # Fixed: QueryEngine already returns a DataFrame, check properly
         if isinstance(result, pd.DataFrame) and not result.empty:
             return result
@@ -409,7 +459,35 @@ def main():
         if st.session_state.current_sql:
             st.markdown("---")
             st.markdown("💡 **Query Explanation:**")
-            st.info("This query will analyze your data based on the SQL shown in the editor. Click 'Run Query' to execute it.")
+            
+            # Show enhanced explanation if available
+            if hasattr(st.session_state, 'query_explanation') and st.session_state.query_explanation:
+                explanation = st.session_state.query_explanation
+                
+                # Main explanation
+                st.info(explanation.get('explanation', 'This query will analyze your data based on the SQL shown in the editor.'))
+                
+                # Show breakdown if available
+                if explanation.get('query_breakdown'):
+                    with st.expander("📋 Step-by-Step Breakdown", expanded=False):
+                        for step in explanation['query_breakdown']:
+                            st.markdown(f"**Step {step['step']}: {step['action']}**")
+                            st.markdown(f"↳ {step['description']}")
+                            if step.get('sql_fragment'):
+                                st.code(step['sql_fragment'], language='sql')
+                
+                # Show confidence and feedback status
+                col1, col2 = st.columns(2)
+                with col1:
+                    confidence = explanation.get('confidence', 0)
+                    st.metric("Confidence", f"{confidence:.0%}")
+                with col2:
+                    if explanation.get('feedback_incorporated'):
+                        st.success("✅ LLM Feedback Applied")
+                    else:
+                        st.info("ℹ️ Basic Explanation")
+            else:
+                st.info("This query will analyze your data based on the SQL shown in the editor. Click 'Run Query' to execute it.")
     
     with col_sql:
         st.subheader("📝 SQL Editor")
