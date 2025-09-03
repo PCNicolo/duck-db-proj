@@ -463,41 +463,24 @@ def main():
         # Show explanation if we have a query
         if st.session_state.current_sql:
             st.markdown("---")
-            st.markdown("💡 **Query Explanation:**")
+            st.markdown("🤖 **LLM Thinking Pad:**")
             
-            # Show enhanced explanation if available
+            # Show LLM thinking pad if available
             if hasattr(st.session_state, 'query_explanation') and st.session_state.query_explanation:
                 explanation = st.session_state.query_explanation
                 
-                # Main explanation
-                st.info(explanation.get('explanation', 'This query will analyze your data based on the SQL shown in the editor.'))
+                # Display the LLM's thinking in a code-like format for clarity
+                thinking_text = explanation.get('explanation', 'Processing query...')
                 
-                # Show breakdown if available
-                if explanation.get('query_breakdown'):
-                    with st.expander("📋 Step-by-Step Breakdown", expanded=False):
-                        for step in explanation['query_breakdown']:
-                            col_icon, col_text = st.columns([1, 11])
-                            with col_icon:
-                                st.markdown(f"**{step['step']}.**")
-                            with col_text:
-                                st.markdown(f"**{step['action']}**")
-                                if step.get('plain_english'):
-                                    st.caption(step['plain_english'])
-                                elif step.get('description'):
-                                    st.caption(step['description'])
+                # Use a container with custom styling for the thinking pad
+                with st.container():
+                    st.code(thinking_text, language='markdown')
                 
-                # Show confidence and feedback status
-                col1, col2 = st.columns(2)
-                with col1:
-                    confidence = explanation.get('confidence', 0)
-                    st.metric("Confidence", f"{confidence:.0%}")
-                with col2:
-                    if explanation.get('feedback_incorporated'):
-                        st.success("✅ LLM Feedback Applied")
-                    else:
-                        st.info("ℹ️ Basic Explanation")
+                # Show confidence score at the bottom
+                confidence = explanation.get('confidence', 0.5)
+                st.caption(f"Confidence: {confidence:.0%}")
             else:
-                st.info("This query will analyze your data based on the SQL shown in the editor. Click 'Run Query' to execute it.")
+                st.info("💭 LLM will show its thinking process here when generating SQL...")
     
     with col_sql:
         st.subheader("📝 SQL Editor")

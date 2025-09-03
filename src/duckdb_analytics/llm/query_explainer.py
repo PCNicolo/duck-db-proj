@@ -44,7 +44,7 @@ class QueryExplainer:
         llm_feedback: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Generate an enhanced explanation of the SQL query.
+        Generate LLM's thinking process / scratch pad for the SQL query.
         
         Args:
             sql_query: The SQL query to explain
@@ -53,11 +53,7 @@ class QueryExplainer:
             llm_feedback: Feedback from the LLM that generated the query
             
         Returns:
-            Dictionary containing:
-                - explanation: Natural language explanation
-                - query_breakdown: Step-by-step breakdown
-                - feedback_incorporated: Whether feedback was used
-                - confidence: Confidence score (0-1)
+            Dictionary containing the LLM's thought process
         """
         start_time = time.time()
         
@@ -68,42 +64,92 @@ class QueryExplainer:
             return self.explanation_cache[cache_key]
         
         try:
-            # Parse SQL query components
-            query_components = self._parse_sql_components(sql_query)
+            # Create the LLM's thinking scratch pad
+            thinking_lines = []
             
-            # Generate base explanation
-            base_explanation = self._generate_base_explanation(
-                query_components, natural_language_query
-            )
+            # Start with understanding the request
+            if natural_language_query:
+                thinking_lines.append(f"🎯 **User wants:** {natural_language_query}")
+                thinking_lines.append("")
+                thinking_lines.append("**My thinking process:**")
+                thinking_lines.append("")
             
-            # Enhance with LLM feedback if provided
+            # Parse the SQL to understand what we're doing
+            components = self._parse_sql_components(sql_query)
+            
+            # Show the LLM's reasoning about data source
+            if components['from']:
+                tables = components['from']
+                thinking_lines.append(f"📊 I need to look at the `{', '.join(tables)}` table(s)")
+            
+            # Reasoning about filters
+            if components['where']:
+                thinking_lines.append(f"🔍 I should filter the data based on {len(components['where'])} condition(s)")
+                for condition in components['where'][:3]:  # Show first 3 conditions
+                    thinking_lines.append(f"   • {condition}")
+            
+            # Reasoning about grouping
+            if components['group_by']:
+                thinking_lines.append(f"📁 I'll group the results by `{', '.join(components['group_by'])}`")
+                thinking_lines.append("   (This organizes data into categories)")
+            
+            # Reasoning about calculations
+            if components['aggregations']:
+                agg_set = set(components['aggregations'])
+                thinking_lines.append(f"🧮 I need to calculate: {', '.join(agg_set)}")
+                for agg in agg_set:
+                    if agg == 'COUNT':
+                        thinking_lines.append("   • COUNT: How many items in each group")
+                    elif agg == 'SUM':
+                        thinking_lines.append("   • SUM: Add up the values")
+                    elif agg == 'AVG':
+                        thinking_lines.append("   • AVG: Find the average")
+                    elif agg == 'MAX':
+                        thinking_lines.append("   • MAX: Find the highest value")
+                    elif agg == 'MIN':
+                        thinking_lines.append("   • MIN: Find the lowest value")
+            
+            # Reasoning about sorting
+            if components['order_by']:
+                thinking_lines.append(f"⬆️ I'll sort by `{', '.join(components['order_by'])}` for better readability")
+            
+            # Reasoning about limits
+            if components['limit']:
+                thinking_lines.append(f"✂️ I'll limit to {components['limit']} results (keep it manageable)")
+            
+            # Add any LLM feedback/additional thoughts
             if llm_feedback:
-                enhanced_explanation = self._incorporate_llm_feedback(
-                    base_explanation, llm_feedback, query_components
-                )
-            else:
-                enhanced_explanation = base_explanation
+                thinking_lines.append("")
+                thinking_lines.append("**Additional considerations:**")
+                # Parse feedback and add key points
+                feedback_lines = llm_feedback.split('\n')
+                for line in feedback_lines[:5]:  # First 5 lines of feedback
+                    if line.strip():
+                        thinking_lines.append(f"💭 {line.strip()}")
             
-            # Generate step-by-step breakdown
-            query_breakdown = self._generate_query_breakdown(
-                query_components, schema_context
-            )
+            # Final thought
+            thinking_lines.append("")
+            thinking_lines.append("✅ **SQL query constructed and ready to execute**")
             
-            # Calculate confidence based on available context
+            # Join all thinking lines
+            llm_thinking = '\n'.join(thinking_lines)
+            
+            # Calculate a more realistic confidence
             confidence = self._calculate_confidence(
                 has_nl_query=bool(natural_language_query),
                 has_schema=bool(schema_context),
                 has_feedback=bool(llm_feedback),
-                components=query_components
+                components=components
             )
             
             result = {
-                "explanation": enhanced_explanation,
-                "query_breakdown": query_breakdown,
+                "explanation": llm_thinking,
+                "query_breakdown": [],  # Empty since we're not using the breakdown anymore
                 "feedback_incorporated": bool(llm_feedback),
                 "confidence": confidence,
                 "generation_time": time.time() - start_time,
-                "components": query_components
+                "components": components,
+                "thinking_pad": True  # Flag to indicate this is a thinking pad
             }
             
             # Cache the result
@@ -118,11 +164,14 @@ class QueryExplainer:
         except Exception as e:
             logger.error(f"Error generating explanation: {str(e)}")
             return {
-                "explanation": "Unable to generate detailed explanation. The query will execute as shown.",
+                "explanation": "🤔 Working on understanding this query...\n\n" + 
+                              f"SQL Query:\n```sql\n{sql_query}\n```\n\n" +
+                              "The query will execute as shown above.",
                 "query_breakdown": [],
                 "feedback_incorporated": False,
-                "confidence": 0.0,
-                "error": str(e)
+                "confidence": 0.5,
+                "error": str(e),
+                "thinking_pad": True
             }
     
     def get_llm_feedback(
