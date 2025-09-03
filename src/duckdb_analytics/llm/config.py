@@ -2,7 +2,7 @@
 
 # LM Studio connection settings
 LM_STUDIO_URL = "http://localhost:1234/v1"
-MODEL_NAME = "local-model"  # LM Studio uses "local-model" as identifier
+MODEL_NAME = "meta-llama-3.1-8b-instruct"  # Use the available model in LM Studio
 
 # Request settings
 REQUEST_TIMEOUT = 10.0  # Increased timeout for complex queries and slower models

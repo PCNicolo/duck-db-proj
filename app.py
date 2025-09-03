@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import duckdb
 import tempfile
+import os
 from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
@@ -26,7 +27,7 @@ st.set_page_config(
     page_title="SQL Analytics Studio",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"  # Show sidebar by default to see data
 )
 
 # Initialize session state
@@ -54,6 +55,81 @@ if "query_result" not in st.session_state:
 
 if "current_sql" not in st.session_state:
     st.session_state.current_sql = ""
+
+if "data_loaded" not in st.session_state:
+    st.session_state.data_loaded = False
+
+def load_all_data_files():
+    """Automatically load all CSV and Parquet files from the data directory."""
+    import os
+    
+    data_dir = "data/samples"
+    loaded_count = 0
+    
+    if os.path.exists(data_dir):
+        files = os.listdir(data_dir)
+        
+        # Sort files to ensure consistent loading order
+        files.sort()
+        
+        # Prefer Parquet over CSV for faster loading
+        parquet_files = [f for f in files if f.endswith('.parquet')]
+        csv_files = [f for f in files if f.endswith('.csv')]
+        
+        # Track which tables have been loaded to avoid duplicates
+        loaded_tables = set()
+        
+        # Load Parquet files first (faster)
+        for file in parquet_files:
+            table_name = Path(file).stem
+            if table_name not in loaded_tables:
+                file_path = os.path.join(data_dir, file)
+                try:
+                    st.session_state.db_connection.register_parquet(file_path, table_name)
+                    
+                    # Get table info
+                    info = st.session_state.db_connection.get_table_info(table_name)
+                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    
+                    st.session_state.registered_tables.append({
+                        "name": table_name,
+                        "rows": rows,
+                        "columns": len(info)
+                    })
+                    loaded_tables.add(table_name)
+                    loaded_count += 1
+                except Exception as e:
+                    print(f"Error loading {file}: {e}")
+        
+        # Load CSV files only if no Parquet version was loaded
+        for file in csv_files:
+            table_name = Path(file).stem
+            if table_name not in loaded_tables:
+                file_path = os.path.join(data_dir, file)
+                try:
+                    st.session_state.db_connection.register_csv(file_path, table_name)
+                    
+                    # Get table info
+                    info = st.session_state.db_connection.get_table_info(table_name)
+                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    
+                    st.session_state.registered_tables.append({
+                        "name": table_name,
+                        "rows": rows,
+                        "columns": len(info)
+                    })
+                    loaded_tables.add(table_name)
+                    loaded_count += 1
+                except Exception as e:
+                    print(f"Error loading {file}: {e}")
+    
+    return loaded_count
+
+# Auto-load data files on first run
+if not st.session_state.data_loaded:
+    loaded_count = load_all_data_files()
+    if loaded_count > 0:
+        st.session_state.data_loaded = True
 
 def load_sample_data():
     """Load sample data for testing."""
@@ -204,27 +280,98 @@ def create_visualization(df: pd.DataFrame, chart_type: str = "auto"):
 def main():
     """Main application."""
     
-    # Header with data management
-    col1, col2, col3 = st.columns([3, 1, 1])
-    with col1:
-        st.title("📊 SQL Analytics Studio")
-    with col2:
-        uploaded_file = st.file_uploader("Upload CSV/Parquet", type=["csv", "parquet"], label_visibility="collapsed")
+    # Sidebar for data preview
+    with st.sidebar:
+        st.header("📁 Data Browser")
+        
+        # Data loading info and controls
+        if st.session_state.data_loaded:
+            st.success(f"✅ Auto-loaded {len(st.session_state.registered_tables)} tables from /data/samples")
+        
+        # Additional file upload option
+        uploaded_file = st.file_uploader("Upload Additional File", type=["csv", "parquet"], label_visibility="visible")
         if uploaded_file:
             if process_uploaded_file(uploaded_file):
-                st.success(f"Loaded {uploaded_file.name}")
+                st.success(f"Added {uploaded_file.name}!")
                 st.rerun()
-    with col3:
-        if st.button("Load Sample Data", type="secondary", use_container_width=True):
-            if load_sample_data():
-                st.success("Sample data loaded!")
-                st.rerun()
+        
+        # Reload data button
+        if st.button("🔄 Reload All Data", use_container_width=True):
+            st.session_state.registered_tables = []
+            st.session_state.data_loaded = False
+            st.rerun()
+        
+        # Show available tables and data preview
+        if st.session_state.registered_tables:
+            st.divider()
+            st.subheader("Available Tables")
+            
+            for table in st.session_state.registered_tables:
+                with st.expander(f"📊 **{table['name']}** ({table['rows']:,} rows)", expanded=True):
+                    try:
+                        # Get table schema
+                        columns_query = f"DESCRIBE {table['name']}"
+                        columns_result = st.session_state.db_connection.execute(columns_query)
+                        schema_df = pd.DataFrame(columns_result.fetchall())
+                        
+                        # Create tabs for schema and data
+                        tab1, tab2 = st.tabs(["Data Preview", "Schema"])
+                        
+                        with tab1:
+                            # Get sample data from the table
+                            preview_query = f"SELECT * FROM {table['name']} LIMIT 10"
+                            preview_result = st.session_state.db_connection.execute(preview_query)
+                            preview_df = pd.DataFrame(preview_result.fetchall())
+                            
+                            # Set column names
+                            if not schema_df.empty:
+                                preview_df.columns = schema_df[0].tolist()[:len(preview_df.columns)]
+                            
+                            # Show preview with formatting
+                            st.dataframe(
+                                preview_df, 
+                                use_container_width=True, 
+                                height=250,
+                                hide_index=True
+                            )
+                            
+                            # Quick action buttons
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("📋 Use in SQL", key=f"use_{table['name']}", use_container_width=True):
+                                    st.session_state.current_sql = f"SELECT * FROM {table['name']} LIMIT 100"
+                                    st.rerun()
+                            with col2:
+                                if st.button("📊 Quick Stats", key=f"stats_{table['name']}", use_container_width=True):
+                                    st.session_state.current_sql = f"SELECT COUNT(*) as total_rows, COUNT(DISTINCT {schema_df[0].iloc[0]}) as unique_{schema_df[0].iloc[0]} FROM {table['name']}"
+                                    st.rerun()
+                        
+                        with tab2:
+                            # Show schema information
+                            if not schema_df.empty and len(schema_df.columns) >= 2:
+                                schema_display = pd.DataFrame({
+                                    'Column': schema_df[0],
+                                    'Type': schema_df[1]
+                                })
+                                st.dataframe(
+                                    schema_display, 
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    height=250
+                                )
+                            else:
+                                st.info("Schema information not available")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)[:100]}")
+        else:
+            st.info("No data loaded. Use the buttons above to get started.")
     
-    # Show available tables
+    # Main content area
+    st.title("📊 SQL Analytics Studio")
+    
+    # Show connection status
     if st.session_state.registered_tables:
-        st.markdown("**Available tables:** " + ", ".join([f"`{t['name']}` ({t['rows']:,} rows)" for t in st.session_state.registered_tables]))
-    else:
-        st.info("No data loaded. Upload a file or load sample data to get started.")
+        st.success(f"Connected to {len(st.session_state.registered_tables)} table(s)")
     
     st.divider()
     
