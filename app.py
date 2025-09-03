@@ -209,10 +209,11 @@ def execute_query(sql: str) -> Optional[pd.DataFrame]:
     """Execute SQL query and return results as DataFrame."""
     try:
         result = st.session_state.query_engine.execute_query(sql)
-        if result and len(result) > 0:
-            # Convert to DataFrame
-            df = pd.DataFrame(result)
-            return df
+        # Fixed: QueryEngine already returns a DataFrame, check properly
+        if isinstance(result, pd.DataFrame) and not result.empty:
+            return result
+        elif isinstance(result, pd.DataFrame):
+            return result  # Return empty DataFrame as-is
         return pd.DataFrame()
     except Exception as e:
         st.error(f"Query error: {e}")
