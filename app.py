@@ -476,10 +476,15 @@ def main():
                 if explanation.get('query_breakdown'):
                     with st.expander("📋 Step-by-Step Breakdown", expanded=False):
                         for step in explanation['query_breakdown']:
-                            st.markdown(f"**Step {step['step']}: {step['action']}**")
-                            st.markdown(f"↳ {step['description']}")
-                            if step.get('sql_fragment'):
-                                st.code(step['sql_fragment'], language='sql')
+                            col_icon, col_text = st.columns([1, 11])
+                            with col_icon:
+                                st.markdown(f"**{step['step']}.**")
+                            with col_text:
+                                st.markdown(f"**{step['action']}**")
+                                if step.get('plain_english'):
+                                    st.caption(step['plain_english'])
+                                elif step.get('description'):
+                                    st.caption(step['description'])
                 
                 # Show confidence and feedback status
                 col1, col2 = st.columns(2)
