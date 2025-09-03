@@ -48,7 +48,7 @@ if "schema_extractor" not in st.session_state:
 if "sql_generator" not in st.session_state:
     # Initialize EnhancedSQLGenerator with the DuckDB connection
     st.session_state.sql_generator = EnhancedSQLGenerator(
-        duckdb_conn=st.session_state.db_connection.connection,
+        duckdb_conn=st.session_state.db_connection.connect(),
         base_url="http://localhost:1234/v1",
         warm_cache=False
     )
