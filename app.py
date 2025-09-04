@@ -34,9 +34,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"  # Show sidebar by default to see data
 )
 
-# Initialize session state
+# Initialize session state with optimized connection settings
 if "db_connection" not in st.session_state:
-    st.session_state.db_connection = DuckDBConnection()
+    # Use optimized connection with better config
+    conn = DuckDBConnection()
+    conn._config.update({
+        "threads": 8,  # Increase thread count for better parallelism
+        "memory_limit": "8GB",  # Increase memory for complex queries
+        "max_memory": "8GB",
+        "enable_object_cache": True,
+        "enable_http_metadata_cache": True,
+
+
+    })
+    st.session_state.db_connection = conn
     st.session_state.db_connection.connect()
 
 if "query_engine" not in st.session_state:
@@ -74,12 +85,31 @@ if "query_explanation" not in st.session_state:
 if "nl_query" not in st.session_state:
     st.session_state.nl_query = ""
 
+# Performance monitoring decorator
+def monitor_performance(func):
+    """Decorator to monitor function performance."""
+    import time
+    import functools
+    
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        elapsed = time.time() - start_time
+        
+        if elapsed > 1.0:  # Log slow operations
+            logger.warning(f"{func.__name__} took {elapsed:.2f}s")
+        
+        return result
+    return wrapper
+
 def load_all_data_files():
     """Automatically load all CSV and Parquet files from the data directory."""
     import os
     
     data_dir = "data/samples"
     loaded_count = 0
+    loaded_tables = []
     
     if os.path.exists(data_dir):
         files = os.listdir(data_dir)
@@ -92,26 +122,29 @@ def load_all_data_files():
         csv_files = [f for f in files if f.endswith('.csv')]
         
         # Track which tables have been loaded to avoid duplicates
-        loaded_tables = set()
+        loaded_table_names = set()
+        loaded_table_info = []
         
         # Load Parquet files first (faster)
         for file in parquet_files:
             table_name = Path(file).stem
-            if table_name not in loaded_tables:
+            if table_name not in loaded_table_names:
                 file_path = os.path.join(data_dir, file)
                 try:
+                    # Use quotes for table names to avoid keyword conflicts
+                    safe_table_name = f'"{table_name}"'
                     st.session_state.db_connection.register_parquet(file_path, table_name)
                     
-                    # Get table info
+                    # Get table info with safe table name
                     info = st.session_state.db_connection.get_table_info(table_name)
-                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {safe_table_name}").fetchone()[0]
                     
-                    st.session_state.registered_tables.append({
+                    loaded_table_info.append({
                         "name": table_name,
                         "rows": rows,
                         "columns": len(info)
                     })
-                    loaded_tables.add(table_name)
+                    loaded_table_names.add(table_name)
                     loaded_count += 1
                 except Exception as e:
                     print(f"Error loading {file}: {e}")
@@ -119,32 +152,42 @@ def load_all_data_files():
         # Load CSV files only if no Parquet version was loaded
         for file in csv_files:
             table_name = Path(file).stem
-            if table_name not in loaded_tables:
+            if table_name not in loaded_table_names:
                 file_path = os.path.join(data_dir, file)
                 try:
+                    # Use quotes for table names to avoid keyword conflicts
+                    safe_table_name = f'"{table_name}"'
                     st.session_state.db_connection.register_csv(file_path, table_name)
                     
-                    # Get table info
+                    # Get table info with safe table name
                     info = st.session_state.db_connection.get_table_info(table_name)
-                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {safe_table_name}").fetchone()[0]
                     
-                    st.session_state.registered_tables.append({
+                    loaded_table_info.append({
                         "name": table_name,
                         "rows": rows,
                         "columns": len(info)
                     })
-                    loaded_tables.add(table_name)
+                    loaded_table_names.add(table_name)
                     loaded_count += 1
                 except Exception as e:
                     print(f"Error loading {file}: {e}")
     
-    return loaded_count
+    return loaded_count, loaded_table_info
 
-# Auto-load data files on first run
+# Auto-load data files on first run with progress indicator
 if not st.session_state.data_loaded:
-    loaded_count = load_all_data_files()
-    if loaded_count > 0:
-        st.session_state.data_loaded = True
+    with st.spinner("Loading data files..."):
+        result = load_all_data_files()
+        if isinstance(result, tuple):
+            loaded_count, loaded_tables = result
+            if loaded_count > 0:
+                st.session_state.registered_tables.extend(loaded_tables)
+                st.session_state.data_loaded = True
+        else:
+            # Fallback for old behavior
+            if result > 0:
+                st.session_state.data_loaded = True
 
 def load_sample_data():
     """Load sample data for testing."""
@@ -207,19 +250,22 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error loading file: {e}")
         return False
 
+@st.cache_data(ttl=600, show_spinner=False)  # Cache for 10 minutes
 def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
-    """Generate SQL from natural language using LM Studio with enhanced explanations."""
+    """Generate SQL from natural language using LM Studio with enhanced explanations and caching."""
     if not st.session_state.sql_generator.is_available():
         st.warning("LM Studio is not available. Please ensure it's running on localhost:1234")
         return None
     
     try:
-        # Generate SQL with enhanced explanation and LLM feedback
-        sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
-            prompt,
-            include_llm_feedback=True,
-            return_metrics=True
-        )
+        # Use a spinner for better UX
+        with st.spinner("Generating SQL query..."):
+            # Generate SQL with enhanced explanation and LLM feedback
+            sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
+                prompt,
+                include_llm_feedback=True,
+                return_metrics=True
+            )
         
         # Store the explanation in session state for display
         if sql and "explanation" in metadata:
@@ -231,8 +277,9 @@ def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
         st.error(f"Error generating SQL: {e}")
         return None
 
+@st.cache_data(ttl=300, show_spinner=False)  # Cache query results for 5 minutes
 def execute_query(sql: str) -> Optional[pd.DataFrame]:
-    """Execute SQL query and return results as DataFrame."""
+    """Execute SQL query and return results as DataFrame with caching."""
     try:
         result = st.session_state.query_engine.execute_query(sql)
         
@@ -274,8 +321,9 @@ def execute_query(sql: str) -> Optional[pd.DataFrame]:
         st.error(f"Query error: {e}")
         return None
 
+@st.cache_data(ttl=300, show_spinner=False)  # Cache visualizations
 def create_visualization(df: pd.DataFrame, chart_type: str = "auto"):
-    """Create a visualization from the dataframe."""
+    """Create a visualization from the dataframe with caching."""
     if df.empty:
         st.info("No data to visualize")
         return

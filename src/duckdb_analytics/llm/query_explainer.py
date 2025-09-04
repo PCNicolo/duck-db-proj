@@ -19,22 +19,58 @@ logger = logging.getLogger(__name__)
 class QueryExplainer:
     """Provides enhanced SQL query explanations with LLM feedback integration."""
     
-    def __init__(self, llm_client=None, base_url: str = "http://localhost:1234/v1"):
+    def __init__(self, llm_client=None, base_url: str = "http://localhost:1234/v1", cache_size: int = 100):
         """
         Initialize the Query Explainer.
         
         Args:
             llm_client: OpenAI-compatible client for LLM interaction
             base_url: Base URL for the LLM API
+            cache_size: Maximum number of cached explanations
         """
         self.llm_client = llm_client
         self.base_url = base_url
+        self.cache_size = cache_size
         
         # Store feedback history for learning
         self.feedback_history: List[Dict[str, Any]] = []
         
-        # Cache for explanations
+        # Enhanced LRU cache for explanations with size limit
         self.explanation_cache: Dict[str, Dict[str, Any]] = {}
+        self.cache_access_order: List[str] = []
+        
+        # Pre-compiled patterns for better performance
+        self._compile_patterns()
+
+    
+    def _compile_patterns(self):
+        """Pre-compile regex patterns for performance."""
+        import re
+        self.patterns = {
+            'select': re.compile(r'SELECT\s+(.*?)\s+FROM', re.IGNORECASE | re.DOTALL),
+            'from': re.compile(r'FROM\s+(.*?)(?:\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|$)', re.IGNORECASE | re.DOTALL),
+            'where': re.compile(r'WHERE\s+(.*?)(?:\s+GROUP|\s+ORDER|\s+LIMIT|$)', re.IGNORECASE | re.DOTALL),
+            'group': re.compile(r'GROUP\s+BY\s+(.*?)(?:\s+HAVING|\s+ORDER|\s+LIMIT|$)', re.IGNORECASE | re.DOTALL),
+            'order': re.compile(r'ORDER\s+BY\s+(.*?)(?:\s+LIMIT|$)', re.IGNORECASE | re.DOTALL),
+            'limit': re.compile(r'LIMIT\s+(\d+)', re.IGNORECASE),
+            'aggregations': re.compile(r'\b(COUNT|SUM|AVG|MAX|MIN|GROUP_CONCAT)\s*\(', re.IGNORECASE)
+        }
+    
+    def _manage_cache(self, key: str, value: Dict[str, Any]):
+        """Manage LRU cache with size limit."""
+        if key in self.explanation_cache:
+            # Move to end (most recently used)
+            self.cache_access_order.remove(key)
+            self.cache_access_order.append(key)
+        else:
+            # Add new entry
+            if len(self.explanation_cache) >= self.cache_size:
+                # Remove least recently used
+                lru_key = self.cache_access_order.pop(0)
+                del self.explanation_cache[lru_key]
+            
+            self.explanation_cache[key] = value
+            self.cache_access_order.append(key)
         
     def generate_explanation(
         self,
@@ -57,10 +93,13 @@ class QueryExplainer:
         """
         start_time = time.time()
         
-        # Check cache first
-        cache_key = f"{sql_query}:{natural_language_query}:{llm_feedback}"
+        # Check cache first with improved key generation
+        cache_key = f"{hash(sql_query)}:{hash(natural_language_query or '')}:{hash(llm_feedback or '')}"
         if cache_key in self.explanation_cache:
             logger.info("Returning cached explanation")
+            # Update access order for LRU
+            self.cache_access_order.remove(cache_key)
+            self.cache_access_order.append(cache_key)
             return self.explanation_cache[cache_key]
         
         try:
@@ -152,8 +191,8 @@ class QueryExplainer:
                 "thinking_pad": True  # Flag to indicate this is a thinking pad
             }
             
-            # Cache the result
-            self.explanation_cache[cache_key] = result
+            # Cache the result with LRU management
+            self._manage_cache(cache_key, result)
             
             # Store feedback for learning
             if llm_feedback:

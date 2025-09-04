@@ -25,7 +25,8 @@ class OptimizedSchemaExtractor:
         duckdb_conn,
         cache: Optional[SchemaCache] = None,
         sample_rows: int = 3,
-        max_workers: int = 4
+        max_workers: int = 4,
+        batch_size: int = 100
     ):
         """
         Initialize optimized schema extractor.
@@ -40,15 +41,19 @@ class OptimizedSchemaExtractor:
         self.cache = cache or SchemaCache()
         self.sample_rows = sample_rows
         self.max_workers = max_workers
+        self.batch_size = batch_size
         self.metrics = PerformanceMetrics()
         
         # Pre-compiled queries for performance
         self._queries = self._compile_queries()
+        
+        # Connection pool for parallel operations
+        self._conn_pool = []
     
     def _compile_queries(self) -> Dict[str, str]:
         """Pre-compile optimized queries."""
         return {
-            # Single CTE query to get all metadata at once
+            # Single CTE query to get all metadata at once - optimized with better row counting
             "full_metadata": """
                 WITH table_info AS (
                     SELECT 
@@ -63,7 +68,11 @@ class OptimizedSchemaExtractor:
                     LEFT JOIN (
                         SELECT 
                             table_name,
-                            APPROX_COUNT_DISTINCT(*) as estimated_row_count
+                            -- Use COUNT(*) with LIMIT for faster estimation
+                            CASE 
+                                WHEN COUNT(*) < 10000 THEN COUNT(*)
+                                ELSE 10000  -- Cap for performance
+                            END as estimated_row_count
                         FROM information_schema.tables
                         WHERE table_schema = 'main'
                         GROUP BY table_name
