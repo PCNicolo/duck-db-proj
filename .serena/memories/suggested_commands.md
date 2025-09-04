@@ -1,58 +1,54 @@
-# Suggested Commands for DuckDB Analytics Dashboard
+# Suggested Commands for Development
 
-## Development Commands
-
-### Running the Application
+## Running the Application
 ```bash
-# Start the Streamlit dashboard
+# Main application
 streamlit run app.py
 
-# Generate sample data for testing
-python generate_sample_data.py
-
-# Use the CLI tool
-python -m duckdb_analytics.cli --help
-python -m duckdb_analytics.cli tables
-python -m duckdb_analytics.cli query "SELECT * FROM sales_data LIMIT 10"
+# Alternative with specific port
+streamlit run app.py --server.port 8501
 ```
 
-### Testing Commands
+## Dependency Management
 ```bash
-# Run all tests
+# Install dependencies
+pip install -r requirements.txt
+
+# Install with development dependencies
+pip install -e ".[dev]"
+
+# Upgrade dependencies
+pip install --upgrade -r requirements.txt
+```
+
+## Code Quality Tools
+```bash
+# Format code with Black
+black src/ app.py
+
+# Lint with Ruff
+ruff check src/ app.py
+
+# Type checking with mypy
+mypy src/ app.py
+
+# Run all quality checks
+black . && ruff check . && mypy .
+```
+
+## Testing
+```bash
+# Run tests (when available)
 pytest
 
-# Run tests with coverage
+# Run with coverage
 pytest --cov=src/duckdb_analytics
 
 # Run specific test file
-pytest tests/test_<module>.py
-
-# Run tests with verbose output
-pytest -v
+pytest tests/test_specific.py
 ```
 
-### Code Quality Commands
-```bash
-# Format code with Black
-black src/ tests/ app.py
-
-# Check formatting without making changes
-black --check src/ tests/ app.py
-
-# Lint with Ruff
-ruff check src/ tests/ app.py
-
-# Fix linting issues automatically
-ruff check --fix src/ tests/ app.py
-
-# Type checking with MyPy
-mypy src/
-
-# Run all quality checks
-black src/ tests/ app.py && ruff check src/ tests/ app.py && mypy src/
-```
-
-### Git Commands (Darwin/macOS specific)
+## Git Commands
 ```bash
 # Check status
 git status
@@ -61,64 +57,53 @@ git status
 git add .
 
 # Commit with message
-git commit -m "Description of changes"
+git commit -m "feat: description"
 
-# View commit history
-git log --oneline
-
-# Create feature branch
-git checkout -b feature/branch-name
-
-# Push to remote
+# Push to branch
 git push origin branch-name
 ```
 
-### System Utilities (Darwin/macOS)
+## Database Operations
+```bash
+# Open DuckDB CLI for analytics.db
+duckdb analytics.db
+
+# Generate sample data
+python generate_sample_data.py
+```
+
+## Virtual Environment
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Activate (macOS/Linux)
+source .venv/bin/activate
+
+# Deactivate
+deactivate
+```
+
+## System Utilities (macOS)
 ```bash
 # List files with details
 ls -la
 
 # Find files
-find . -name "*.py" -type f
+find . -name "*.py"
 
-# Search in files (using ripgrep if installed, otherwise grep)
-grep -r "pattern" src/
-rg "pattern" src/  # if ripgrep is installed
-
-# Check disk usage
-du -sh *
+# Search in files
+grep -r "pattern" .
 
 # Monitor processes
-top
 ps aux | grep python
 
-# Check Python environment
-which python
-python --version
-pip list
+# Check disk usage
+du -sh .
 ```
 
-### Virtual Environment
-```bash
-# The project appears to use a .venv virtual environment
-# Activate virtual environment
-source .venv/bin/activate
-
-# Deactivate virtual environment  
-deactivate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Install development dependencies
-pip install -e ".[dev]"
-```
-
-## Quick Development Workflow
-1. Activate virtual environment: `source .venv/bin/activate`
-2. Make code changes
-3. Format code: `black src/ tests/`
-4. Lint code: `ruff check --fix src/ tests/`
-5. Type check: `mypy src/`
-6. Run tests: `pytest`
-7. Run application: `streamlit run app.py`
+## LM Studio Setup
+1. Download and install LM Studio
+2. Load a SQL-capable model
+3. Ensure server runs on http://localhost:1234
+4. Test connection before running app

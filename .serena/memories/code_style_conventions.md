@@ -1,44 +1,41 @@
 # Code Style and Conventions
 
-## Python Version
-- Python 3.10+ (target versions: 3.10, 3.11, 3.12)
+## Python Style
+- **Line Length**: 88 characters (Black default)
+- **Target Python Version**: 3.10, 3.11, 3.12
+- **Formatting Tool**: Black (automatic formatting)
+- **Linting**: Ruff with rules E, F, W, I, N, B
+- **Type Hints**: Required (mypy strict mode)
 
-## Code Style
-- **Formatter**: Black with line-length=88
-- **Linter**: Ruff with line-length=88, target-version="py310"
-- **Type Checker**: MyPy with strict settings (disallow_untyped_defs=true)
+## Code Organization
+- **Project Structure**: src-layout with packages under `src/duckdb_analytics/`
+- **Module Organization**:
+  - `core/`: Database connections and query engine
+  - `llm/`: Language model integration and SQL generation
+  - `ui/`: Streamlit UI components
+  - `visualizations/`: Chart generation and recommendations
 
 ## Naming Conventions
-- **Files**: snake_case (e.g., query_engine.py, sql_editor.py)
-- **Classes**: PascalCase (e.g., DuckDBConnection, QueryEngine, SQLGenerator)
-- **Functions/Methods**: snake_case (e.g., execute_query, get_table_info)
+- **Functions/Variables**: snake_case (e.g., `load_sample_data`, `execute_query`)
+- **Classes**: PascalCase (e.g., `DuckDBConnection`, `EnhancedSQLGenerator`)
 - **Constants**: UPPER_SNAKE_CASE
-- **Private methods**: Prefix with underscore (e.g., _validate_query)
+- **Private Methods**: Leading underscore (e.g., `_config`)
 
-## Type Hints
-- All functions should have type hints for parameters and return types
-- Use typing module for complex types (List, Dict, Any, Optional, Union)
-- MyPy is configured with strict type checking
+## Import Style
+- Standard library imports first
+- Third-party imports second
+- Local imports last
+- Each group separated by blank line
+- Absolute imports preferred for local modules
 
-## Docstrings
-- Functions and classes should have docstrings
-- Follow Google/NumPy docstring style
-- Include parameter descriptions and return types in docstrings
+## Documentation
+- Module-level docstrings for all files
+- Function/method docstrings following Google style
+- Type hints for all function parameters and returns
+- Inline comments for complex logic
 
-## Module Structure
-- Each module has an __init__.py file
-- Imports are organized (standard library, third-party, local)
-- Use absolute imports from src.duckdb_analytics
-
-## Testing
-- Test files prefixed with test_ in tests/ directory
-- Use pytest for testing
-- Test functions named test_<functionality>()
-
-## Ruff Rules
-- E (Error codes)
-- F (Pyflakes)
-- W (Warning codes)  
-- I (isort)
-- N (Naming conventions)
-- B (Bugbear)
+## Best Practices
+- Early returns to reduce nesting
+- Context managers for resource management
+- Logging instead of print statements
+- Session state management for Streamlit components

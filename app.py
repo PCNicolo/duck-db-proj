@@ -258,14 +258,13 @@ def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
         return None
     
     try:
-        # Use a spinner for better UX
-        with st.spinner("Generating SQL query..."):
-            # Generate SQL with enhanced explanation and LLM feedback
-            sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
-                prompt,
-                include_llm_feedback=True,
-                return_metrics=True
-            )
+        # No spinner here - the calling function already has one
+        # Generate SQL with enhanced explanation, but skip LLM feedback if it's slow
+        sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
+            prompt,
+            include_llm_feedback=False,  # Disable for now to avoid timeouts
+            return_metrics=True
+        )
         
         # Store the explanation in session state for display
         if sql and "explanation" in metadata:

@@ -1,29 +1,29 @@
-# DuckDB Analytics Dashboard Project Overview
+# SQL Analytics Studio - Project Overview
 
 ## Purpose
-A powerful local data analytics dashboard built on DuckDB for analyzing CSV and Parquet files with zero-copy SQL queries. The project provides both a web-based Streamlit dashboard and a CLI tool for data exploration and analytics.
+SQL Analytics Studio is a streamlined data analytics tool that provides:
+1. **Natural Language to SQL conversion** - Chat interface powered by LM Studio for converting natural language queries to SQL
+2. **Smart Visualization** - Automatic detection of optimal chart types with manual override capabilities
+3. **DuckDB Integration** - Fast, embedded analytics database for local data processing
 
 ## Tech Stack
-- **Database**: DuckDB (embedded analytical database) v0.9.0+
-- **Backend**: Python 3.10+
-- **Web Framework**: Streamlit v1.28.0+
-- **Visualization**: Plotly v5.17.0+, Altair v5.0.0+
-- **CLI**: Click v8.1.0+
-- **Data Processing**: Pandas v2.0.0+, PyArrow v14.0.0+
+- **Language**: Python 3.10+
+- **Database**: DuckDB (embedded analytical database)
+- **Frontend**: Streamlit (web application framework)
+- **Visualization**: Plotly, Altair
+- **Data Processing**: Pandas, PyArrow
+- **LLM Integration**: LM Studio (local LLM) via OpenAI-compatible API
+- **Other**: python-dotenv, sqlparse, markdown-tree-parser
 
-## Main Features
-1. Zero-copy analytics - query files directly without loading into memory
-2. Interactive Streamlit web dashboard for data exploration
-3. CLI tool for command-line queries and operations
-4. Support for CSV and Parquet file formats
-5. Full SQL editor with query templates and execution plans
-6. Built-in visualizations using Plotly
-7. Data management with file upload, conversion, and catalog management
-8. Sample data generator for testing and demos
+## Key Features
+- Side-by-side layout with chat helper and SQL editor
+- CSV/Parquet file upload and sample data generation
+- Auto-detecting chart types (line, bar, scatter, pie, heatmap)
+- Query execution with performance monitoring
+- Streamlined single-page interface
 
-## Design Principles
-- **Zero-Copy Analytics**: Query files directly without loading into memory
-- **Local-First**: No external dependencies or cloud services
-- **Performance**: Leverage DuckDB's columnar engine for fast queries
-- **Simplicity**: Minimal setup, intuitive interface
-- **Extensibility**: Plugin architecture for custom analytics
+## Development Environment
+- **System**: Darwin (macOS)
+- **Python Version**: 3.10+
+- **Virtual Environment**: .venv
+- **Package Manager**: pip with pyproject.toml configuration

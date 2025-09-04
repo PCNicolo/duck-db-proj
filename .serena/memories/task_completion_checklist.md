@@ -1,65 +1,59 @@
 # Task Completion Checklist
 
-When completing any development task in this project, follow these steps:
+When completing any development task, follow this checklist:
 
 ## 1. Code Quality Checks
-```bash
-# Format all modified files with Black
-black src/ tests/ app.py
+- [ ] Run Black formatter: `black src/ app.py`
+- [ ] Run Ruff linter: `ruff check src/ app.py`
+- [ ] Run type checking: `mypy src/ app.py`
+- [ ] Fix any issues identified by the tools
 
-# Run linting checks and auto-fix issues
-ruff check --fix src/ tests/ app.py
+## 2. Testing (when tests are available)
+- [ ] Run test suite: `pytest`
+- [ ] Ensure all tests pass
+- [ ] Add tests for new functionality (if applicable)
+- [ ] Check test coverage: `pytest --cov=src/duckdb_analytics`
 
-# Run type checking
-mypy src/
-```
+## 3. Documentation
+- [ ] Update docstrings for new/modified functions
+- [ ] Update README if functionality changed
+- [ ] Add inline comments for complex logic
+- [ ] Update type hints
 
-## 2. Testing
-```bash
-# Run all tests to ensure nothing is broken
-pytest
-
-# Run tests with coverage if working on new features
-pytest --cov=src/duckdb_analytics
-
-# Run specific test files related to your changes
-pytest tests/test_<relevant_module>.py -v
-```
-
-## 3. Manual Testing
-- If you modified the Streamlit app: `streamlit run app.py` and test the UI
-- If you modified the CLI: Test relevant CLI commands
-- If you added new queries: Test with sample data
-
-## 4. Documentation
-- Update docstrings if function signatures changed
-- Update README.md if adding new features
-- Update ARCHITECTURE.md if changing system design
+## 4. Manual Verification
+- [ ] Test the application: `streamlit run app.py`
+- [ ] Verify new features work as expected
+- [ ] Test with sample data
+- [ ] Check for regressions in existing features
 
 ## 5. Git Workflow
+- [ ] Stage changes: `git add .`
+- [ ] Review changes: `git diff --cached`
+- [ ] Commit with descriptive message: `git commit -m "type: description"`
+- [ ] Push to feature branch (not main)
+
+## 6. Performance Checks
+- [ ] Monitor query execution times
+- [ ] Check memory usage for large datasets
+- [ ] Verify UI responsiveness
+- [ ] Test with various data sizes
+
+## 7. LM Studio Integration
+- [ ] Verify LM Studio is running on port 1234
+- [ ] Test natural language to SQL conversion
+- [ ] Check error handling for LLM failures
+
+## Quick Command Sequence
 ```bash
-# Check what files were modified
-git status
+# Format and check code quality
+black . && ruff check . && mypy .
 
-# Review changes
-git diff
+# Run tests (when available)
+pytest
 
-# Stage and commit changes
-git add .
-git commit -m "Descriptive commit message"
+# Run application to verify
+streamlit run app.py
+
+# Commit changes
+git add . && git commit -m "feat: your change description"
 ```
-
-## Important Notes
-- Always run tests before committing
-- Ensure Black formatting is applied (line-length=88)
-- Fix any Ruff linting issues
-- Address MyPy type checking errors
-- The project uses strict type checking - all functions need type hints
-
-## Quick All-in-One Command
-```bash
-# Run all checks in sequence
-black src/ tests/ app.py && ruff check src/ tests/ app.py && mypy src/ && pytest
-```
-
-If all checks pass, your code is ready to commit!

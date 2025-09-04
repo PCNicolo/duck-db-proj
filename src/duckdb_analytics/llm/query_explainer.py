@@ -216,16 +216,18 @@ class QueryExplainer:
     def get_llm_feedback(
         self,
         sql_query: str,
-        natural_language_query: str,
-        execution_result: Optional[Dict] = None
+        natural_language_query: str = None,
+        execution_result: Any = None,
+        timeout: int = 5
     ) -> Optional[str]:
         """
-        Request feedback from LM-Studio about the query.
+        Get feedback from the LLM on the generated SQL and explanation.
         
         Args:
             sql_query: The generated SQL query
-            natural_language_query: The original request
-            execution_result: Optional execution results
+            natural_language_query: The original natural language query
+            execution_result: Result from executing the query (optional)
+            timeout: Timeout in seconds for LLM request
             
         Returns:
             Feedback string from the LLM
@@ -238,14 +240,16 @@ class QueryExplainer:
                 sql_query, natural_language_query, execution_result
             )
             
+            # Add timeout to the request
             response = self.llm_client.chat.completions.create(
                 model="local-model",
                 messages=[
-                    {"role": "system", "content": "You are a SQL expert providing feedback on query generation and explanation."},
+                    {"role": "system", "content": "You are a SQL expert providing brief feedback. Keep responses under 3 sentences."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=200,  # Reduced from 500 for faster response
+                timeout=timeout  # Add explicit timeout
             )
             
             feedback = response.choices[0].message.content
@@ -254,7 +258,8 @@ class QueryExplainer:
             return feedback
             
         except Exception as e:
-            logger.error(f"Error getting LLM feedback: {str(e)}")
+            logger.warning(f"LLM feedback timed out or failed (non-critical): {str(e)}")
+            # Return None silently - feedback is optional enhancement
             return None
     
     def _parse_sql_components(self, sql_query: str) -> Dict[str, Any]:

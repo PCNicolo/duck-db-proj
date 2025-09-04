@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from .config import (
     DEFAULT_CONTEXT_LEVEL,
+    FEEDBACK_TIMEOUT,
     LM_STUDIO_URL,
     MAX_TOKENS,
     MODEL_NAME,
@@ -212,21 +213,37 @@ class EnhancedSQLGenerator:
         start_time = time.time()
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": natural_language_query}
-                ],
-                max_tokens=MAX_TOKENS,
-                temperature=TEMPERATURE,
-                stream=False
-            )
+            # Try to generate SQL with retry logic
+            max_retries = 2
+            retry_count = 0
             
-            sql_query = response.choices[0].message.content.strip()
-            
-            # Clean up the SQL
-            sql_query = self._clean_sql_output(sql_query)
+            while retry_count < max_retries:
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": natural_language_query}
+                        ],
+                        max_tokens=MAX_TOKENS,
+                        temperature=TEMPERATURE,
+                        stream=False,
+                        timeout=REQUEST_TIMEOUT  # Use configured timeout
+                    )
+                    
+                    sql_query = response.choices[0].message.content.strip()
+                    
+                    # Clean up the SQL
+                    sql_query = self._clean_sql_output(sql_query)
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        raise e
+                    logger.warning(f"Retry {retry_count}/{max_retries} after error: {str(e)}")
+                    time.sleep(1)  # Brief pause before retry
             
             metadata["generation_time"] = time.time() - start_time
             self.metrics.end_operation("llm_generation", {"success": True})
@@ -298,14 +315,20 @@ class EnhancedSQLGenerator:
             # Get schema for context
             schema = self.schema_extractor.extract_schema_optimized()
             
-            # Get LLM feedback if requested
+            # Get LLM feedback if requested (with timeout protection)
             llm_feedback = None
             if include_llm_feedback:
-                llm_feedback = self.query_explainer.get_llm_feedback(
-                    sql_query=sql_query,
-                    natural_language_query=natural_language_query,
-                    execution_result=None  # Can be added later if query is executed
-                )
+                try:
+                    # Try to get feedback but don't let it block the main flow
+                    llm_feedback = self.query_explainer.get_llm_feedback(
+                        sql_query=sql_query,
+                        natural_language_query=natural_language_query,
+                        execution_result=None,  # Can be added later if query is executed
+                        timeout=FEEDBACK_TIMEOUT  # Use configured timeout for feedback
+                    )
+                except Exception:
+                    # Silently continue without feedback - it's optional
+                    llm_feedback = None
             
             # Generate enhanced explanation
             explanation_result = self.query_explainer.generate_explanation(
@@ -335,6 +358,16 @@ class EnhancedSQLGenerator:
     
     def _adapt_cached_sql(self, sql_template: str, query: str) -> str:
         """Adapt cached SQL template to current query."""
+        # Handle case where sql_template might be a CacheEntry object
+        if hasattr(sql_template, 'data'):
+            sql_template = sql_template.data
+        elif hasattr(sql_template, 'replace'):
+            # It's already a string, continue
+            pass
+        else:
+            # Fallback - convert to string
+            sql_template = str(sql_template)
+        
         # Simple adaptation - can be enhanced with more sophisticated logic
         query_lower = query.lower()
         
