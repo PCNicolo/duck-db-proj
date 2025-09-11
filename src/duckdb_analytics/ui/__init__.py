@@ -2,4 +2,4 @@
 
 from .sql_editor import EnhancedSQLEditor
 
-__all__ = ['EnhancedSQLEditor']
+__all__ = ["EnhancedSQLEditor"]

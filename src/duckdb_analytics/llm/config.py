@@ -2,19 +2,20 @@
 
 # LM Studio connection settings
 LM_STUDIO_URL = "http://localhost:1234/v1"
-MODEL_NAME = "local-model"  # LM Studio uses "local-model" as identifier
+MODEL_NAME = "meta-llama-3.1-8b-instruct"  # Use the available model in LM Studio
 
 # Request settings
-REQUEST_TIMEOUT = 10.0  # Increased timeout for complex queries and slower models
-MAX_TOKENS = 500
+REQUEST_TIMEOUT = 5.0  # Reduced for faster response (was 30.0)
+FEEDBACK_TIMEOUT = 1.0  # Reduced feedback timeout (was 3.0)
+MAX_TOKENS = 2000
 TEMPERATURE = 0.1  # Low temperature for consistent SQL generation
 
 # Context window management
 MAX_CONTEXT_TOKENS = 4000  # Maximum tokens for context (adjust based on model)
 SCHEMA_TOKEN_ESTIMATE_RATIO = 1.5  # Approximate tokens per character ratio
 SAMPLE_ROWS_DEFAULT = 3  # Default number of sample rows to include
-CONTEXT_DETAIL_LEVELS = ['minimal', 'standard', 'comprehensive']
-DEFAULT_CONTEXT_LEVEL = 'standard'
+CONTEXT_DETAIL_LEVELS = ["minimal", "standard", "comprehensive"]
+DEFAULT_CONTEXT_LEVEL = "standard"
 
 # Schema caching settings
 SCHEMA_CACHE_TTL = 3600  # 1 hour in seconds
@@ -62,18 +63,35 @@ You have access to detailed schema information including:
 
 # Query type detection patterns
 QUERY_TYPE_PATTERNS = {
-    'aggregation': ['sum', 'total', 'count', 'average', 'mean', 'max', 'min', 'group by'],
-    'filtering': ['where', 'filter', 'only', 'exclude', 'between', 'greater', 'less'],
-    'joining': ['combine', 'merge', 'relate', 'with', 'including', 'join'],
-    'sorting': ['sort', 'order', 'rank', 'top', 'bottom', 'first', 'last'],
-    'time_series': ['over time', 'by date', 'trend', 'timeline', 'daily', 'monthly', 'yearly']
+    "aggregation": [
+        "sum",
+        "total",
+        "count",
+        "average",
+        "mean",
+        "max",
+        "min",
+        "group by",
+    ],
+    "filtering": ["where", "filter", "only", "exclude", "between", "greater", "less"],
+    "joining": ["combine", "merge", "relate", "with", "including", "join"],
+    "sorting": ["sort", "order", "rank", "top", "bottom", "first", "last"],
+    "time_series": [
+        "over time",
+        "by date",
+        "trend",
+        "timeline",
+        "daily",
+        "monthly",
+        "yearly",
+    ],
 }
 
 # Dynamic prompt templates for different query types
 QUERY_TYPE_HINTS = {
-    'aggregation': "Focus on GROUP BY and aggregate functions. Consider HAVING for filtered aggregations.",
-    'filtering': "Apply WHERE clauses efficiently. Use indexes on filter columns when possible.",
-    'joining': "Use appropriate JOIN types. Consider join order for performance.",
-    'sorting': "Apply ORDER BY after filtering. Use indexes for sort columns.",
-    'time_series': "Use date_trunc for time grouping. Consider window functions for running totals."
+    "aggregation": "Focus on GROUP BY and aggregate functions. Consider HAVING for filtered aggregations.",
+    "filtering": "Apply WHERE clauses efficiently. Use indexes on filter columns when possible.",
+    "joining": "Use appropriate JOIN types. Consider join order for performance.",
+    "sorting": "Apply ORDER BY after filtering. Use indexes for sort columns.",
+    "time_series": "Use date_trunc for time grouping. Consider window functions for running totals.",
 }
