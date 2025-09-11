@@ -23,8 +23,11 @@ sys.path.append('src')
 from duckdb_analytics.core.connection import DuckDBConnection
 from duckdb_analytics.core.query_engine import QueryEngine
 from duckdb_analytics.llm.enhanced_sql_generator import EnhancedSQLGenerator
+from duckdb_analytics.llm.integrated_generator import IntegratedSQLGenerator, GenerationMode
 from duckdb_analytics.llm.schema_extractor import SchemaExtractor
 from duckdb_analytics.visualizations.recommendation_engine import ChartRecommendationEngine
+from duckdb_analytics.ui.enhanced_thinking_pad import EnhancedThinkingPad
+from duckdb_analytics.ui.model_config_ui import ModelConfigUI
 
 # Page configuration
 st.set_page_config(
@@ -57,11 +60,19 @@ if "schema_extractor" not in st.session_state:
     st.session_state.schema_extractor = SchemaExtractor(st.session_state.db_connection)
 
 if "sql_generator" not in st.session_state:
-    # Initialize EnhancedSQLGenerator with the DuckDB connection
-    st.session_state.sql_generator = EnhancedSQLGenerator(
+    # Initialize IntegratedSQLGenerator with streaming and adaptive features
+    st.session_state.sql_generator = IntegratedSQLGenerator(
         duckdb_conn=st.session_state.db_connection.connect(),
         base_url="http://localhost:1234/v1",
-        warm_cache=False  # Disabled for faster startup
+        enable_streaming=True,
+        enable_adaptive=True
+    )
+    
+    # Also keep the enhanced generator for backward compatibility
+    st.session_state.enhanced_generator = EnhancedSQLGenerator(
+        duckdb_conn=st.session_state.db_connection.connect(),
+        base_url="http://localhost:1234/v1",
+        warm_cache=False
     )
 
 if "chart_recommender" not in st.session_state:
@@ -84,6 +95,15 @@ if "query_explanation" not in st.session_state:
 
 if "nl_query" not in st.session_state:
     st.session_state.nl_query = ""
+
+if "thinking_pad" not in st.session_state:
+    st.session_state.thinking_pad = EnhancedThinkingPad()
+
+if "model_config_ui" not in st.session_state:
+    st.session_state.model_config_ui = ModelConfigUI()
+
+if "generation_mode" not in st.session_state:
+    st.session_state.generation_mode = GenerationMode.BALANCED
 
 # Performance monitoring decorator
 def monitor_performance(func):
@@ -283,30 +303,60 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error loading file: {e}")
         return False
 
-@st.cache_data(ttl=60, show_spinner=False)  # Cache for 1 minute for faster iteration
-def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
-    """Generate SQL from natural language using LM Studio with enhanced explanations and caching."""
-    if not st.session_state.sql_generator.is_available():
-        st.warning("LM Studio is not available. Please ensure it's running on localhost:1234")
-        return None
-    
+def generate_sql_from_natural_language(prompt: str, use_streaming: bool = False) -> Optional[str]:
+    """Generate SQL from natural language using integrated generator with optional streaming."""
     try:
-        # No spinner here - the calling function already has one
-        # Generate SQL with enhanced explanation, but skip LLM feedback if it's slow
-        sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
-            prompt,
-            include_llm_feedback=False,  # Disabled for performance
-            return_metrics=False  # Disabled for speed
-        )
+        # Use integrated generator for better performance
+        if use_streaming and hasattr(st.session_state, 'thinking_pad'):
+            # Streaming mode with live thinking pad updates
+            st.session_state.thinking_pad.start_streaming()
+            
+            # Define callback for streaming updates
+            def stream_callback(update):
+                st.session_state.thinking_pad.handle_stream_update(update)
+            
+            result = st.session_state.sql_generator.generate_sql(
+                natural_language_query=prompt,
+                mode=st.session_state.generation_mode,
+                stream_callback=stream_callback
+            )
+            
+            st.session_state.thinking_pad.stop_streaming()
+        else:
+            # Traditional mode (non-streaming)
+            result = st.session_state.sql_generator.generate_sql(
+                natural_language_query=prompt,
+                mode=st.session_state.generation_mode
+            )
         
-        # Store the explanation in session state for display
-        if sql and "explanation" in metadata:
-            st.session_state.query_explanation = metadata["explanation"]
+        # Store the result
+        if result and result.sql:
+            st.session_state.query_explanation = {
+                'explanation': result.thinking_process,
+                'confidence': result.confidence,
+                'profile_used': result.profile_used,
+                'generation_time': result.generation_time
+            }
             st.session_state.nl_query = prompt
+            return result.sql
         
-        return sql
+        return None
     except Exception as e:
         st.error(f"Error generating SQL: {e}")
+        # Fallback to enhanced generator if integrated fails
+        try:
+            if hasattr(st.session_state, 'enhanced_generator'):
+                sql, metadata = st.session_state.enhanced_generator.generate_sql_with_explanation(
+                    prompt,
+                    include_llm_feedback=False,
+                    return_metrics=False
+                )
+                if sql and "explanation" in metadata:
+                    st.session_state.query_explanation = metadata["explanation"]
+                    st.session_state.nl_query = prompt
+                return sql
+        except:
+            pass
         return None
 
 @st.cache_data(ttl=60, show_spinner=False)  # Cache query results for 1 minute
@@ -416,8 +466,46 @@ def create_visualization(df: pd.DataFrame, chart_type: str = "auto"):
 def main():
     """Main application."""
     
-    # Sidebar for data preview
+    # Sidebar for data preview and configuration
     with st.sidebar:
+        # Add model configuration section
+        st.header("🤖 LLM Configuration")
+        
+        # Quick mode selector
+        mode_options = ["Fast", "Balanced", "Thorough"]
+        selected_mode = st.select_slider(
+            "Generation Mode",
+            options=mode_options,
+            value="Balanced",
+            help="Choose between speed and quality"
+        )
+        
+        # Update session state based on selection
+        mode_map = {
+            "Fast": GenerationMode.FAST,
+            "Balanced": GenerationMode.BALANCED,
+            "Thorough": GenerationMode.THOROUGH
+        }
+        st.session_state.generation_mode = mode_map[selected_mode]
+        
+        # Show mode description
+        mode_descriptions = {
+            "Fast": "⚡ Quick responses, minimal analysis",
+            "Balanced": "⚖️ Balanced speed and quality",
+            "Thorough": "🔍 Comprehensive analysis"
+        }
+        st.caption(mode_descriptions[selected_mode])
+        
+        # Streaming toggle
+        st.session_state.use_streaming = st.checkbox(
+            "Enable Streaming",
+            value=st.session_state.get('use_streaming', True),
+            key="streaming_toggle",
+            help="Show live thinking process while generating SQL"
+        )
+        
+        st.divider()
+        
         st.header("📁 Data Browser")
         
         # Data loading info and controls
@@ -530,7 +618,9 @@ def main():
             if st.button("Generate SQL →", type="primary", use_container_width=True):
                 if nl_query:
                     with st.spinner("Generating SQL..."):
-                        generated_sql = generate_sql_from_natural_language(nl_query)
+                        # Check if streaming is enabled in sidebar
+                        use_streaming = st.session_state.get('use_streaming', False)
+                        generated_sql = generate_sql_from_natural_language(nl_query, use_streaming)
                         if generated_sql:
                             st.session_state.current_sql = generated_sql
                             st.rerun()
@@ -540,27 +630,40 @@ def main():
                 st.session_state.current_sql = ""
                 st.rerun()
         
-        # Show explanation if we have a query
+        # Show enhanced thinking pad
         if st.session_state.current_sql:
             st.markdown("---")
             st.markdown("🤖 **LLM Thinking Pad:**")
             
-            # Show LLM thinking pad if available
-            if hasattr(st.session_state, 'query_explanation') and st.session_state.query_explanation:
-                explanation = st.session_state.query_explanation
-                
-                # Display the LLM's thinking in a code-like format for clarity
-                thinking_text = explanation.get('explanation', 'Processing query...')
-                
-                # Use a container with custom styling for the thinking pad
-                with st.container():
-                    st.code(thinking_text, language='markdown')
-                
-                # Show confidence score at the bottom
-                confidence = explanation.get('confidence', 0.5)
-                st.caption(f"Confidence: {confidence:.0%}")
-            else:
-                st.info("💭 LLM will show its thinking process here when generating SQL...")
+            # Use the enhanced thinking pad
+            thinking_container = st.container()
+            with thinking_container:
+                if hasattr(st.session_state, 'query_explanation') and st.session_state.query_explanation:
+                    explanation = st.session_state.query_explanation
+                    
+                    # Check if we have streaming data or static data
+                    if hasattr(st.session_state, 'thinking_pad'):
+                        # Use enhanced thinking pad for better display
+                        thinking_pad = EnhancedThinkingPad(thinking_container)
+                        thinking_pad.render_static(
+                            thinking_process=explanation.get('explanation', 'Processing query...'),
+                            sql=st.session_state.current_sql,
+                            confidence=explanation.get('confidence', 0.5)
+                        )
+                    else:
+                        # Fallback to simple display
+                        thinking_text = explanation.get('explanation', 'Processing query...')
+                        st.code(thinking_text, language='markdown')
+                        confidence = explanation.get('confidence', 0.5)
+                        st.caption(f"Confidence: {confidence:.0%}")
+                    
+                    # Show additional metadata if available
+                    if 'profile_used' in explanation:
+                        st.caption(f"Profile: {explanation['profile_used']}")
+                    if 'generation_time' in explanation:
+                        st.caption(f"Generation time: {explanation['generation_time']:.2f}s")
+                else:
+                    st.info("💭 LLM will show its thinking process here when generating SQL...")
     
     with col_sql:
         st.subheader("📝 SQL Editor")
