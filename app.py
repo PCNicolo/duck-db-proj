@@ -303,7 +303,7 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error loading file: {e}")
         return False
 
-def generate_sql_from_natural_language(prompt: str, use_streaming: bool = False) -> Optional[str]:
+def generate_sql_from_natural_language(prompt: str, use_streaming: bool = False, thinking_mode: bool = False) -> Optional[str]:
     """Generate SQL from natural language using integrated generator with optional streaming."""
     try:
         # Use integrated generator for better performance
@@ -324,10 +324,48 @@ def generate_sql_from_natural_language(prompt: str, use_streaming: bool = False)
             st.session_state.thinking_pad.stop_streaming()
         else:
             # Traditional mode (non-streaming)
-            result = st.session_state.sql_generator.generate_sql(
-                natural_language_query=prompt,
-                mode=st.session_state.generation_mode
-            )
+            # Check if we should use thinking mode with enhanced generator
+            if thinking_mode and hasattr(st.session_state, 'enhanced_generator'):
+                # Use enhanced generator directly for thinking mode
+                sql, metadata = st.session_state.enhanced_generator.generate_sql_with_explanation(
+                    prompt,
+                    include_llm_feedback=False,
+                    return_metrics=True,
+                    thinking_mode=thinking_mode
+                )
+                
+                if sql:
+                    
+                    # Create result-like object for consistency
+                    class SimpleResult:
+                        def __init__(self, sql, metadata):
+                            self.sql = sql
+                            # Extract thinking from metadata
+                            if thinking_mode and "detailed_thinking" in metadata and metadata["detailed_thinking"]:
+                                self.thinking_process = metadata["detailed_thinking"]
+                                print(f"Using detailed_thinking: {len(self.thinking_process)} chars")
+                            elif "explanation" in metadata:
+                                if isinstance(metadata["explanation"], dict):
+                                    self.thinking_process = metadata["explanation"].get("explanation", "")
+                                else:
+                                    self.thinking_process = str(metadata["explanation"])
+                                print(f"Using explanation: {len(self.thinking_process)} chars")
+                            else:
+                                self.thinking_process = "Detailed analysis completed"
+                                print("Using fallback thinking process")
+                            self.confidence = metadata.get("confidence", 0.5)
+                            self.profile_used = metadata.get("profile_used", "Enhanced Generator")
+                            self.generation_time = metadata.get("generation_time", 0)
+                    
+                    result = SimpleResult(sql, metadata)
+                else:
+                    result = None
+            else:
+                # Use integrated generator for non-thinking mode
+                result = st.session_state.sql_generator.generate_sql(
+                    natural_language_query=prompt,
+                    mode=st.session_state.generation_mode
+                )
         
         # Store the result
         if result and result.sql:
@@ -343,20 +381,6 @@ def generate_sql_from_natural_language(prompt: str, use_streaming: bool = False)
         return None
     except Exception as e:
         st.error(f"Error generating SQL: {e}")
-        # Fallback to enhanced generator if integrated fails
-        try:
-            if hasattr(st.session_state, 'enhanced_generator'):
-                sql, metadata = st.session_state.enhanced_generator.generate_sql_with_explanation(
-                    prompt,
-                    include_llm_feedback=False,
-                    return_metrics=False
-                )
-                if sql and "explanation" in metadata:
-                    st.session_state.query_explanation = metadata["explanation"]
-                    st.session_state.nl_query = prompt
-                return sql
-        except:
-            pass
         return None
 
 @st.cache_data(ttl=60, show_spinner=False)  # Cache query results for 1 minute
@@ -468,43 +492,6 @@ def main():
     
     # Sidebar for data preview and configuration
     with st.sidebar:
-        # Add model configuration section
-        st.header("🤖 LLM Configuration")
-        
-        # Quick mode selector
-        mode_options = ["Fast", "Balanced", "Thorough"]
-        selected_mode = st.select_slider(
-            "Generation Mode",
-            options=mode_options,
-            value="Balanced",
-            help="Choose between speed and quality"
-        )
-        
-        # Update session state based on selection
-        mode_map = {
-            "Fast": GenerationMode.FAST,
-            "Balanced": GenerationMode.BALANCED,
-            "Thorough": GenerationMode.THOROUGH
-        }
-        st.session_state.generation_mode = mode_map[selected_mode]
-        
-        # Show mode description
-        mode_descriptions = {
-            "Fast": "⚡ Quick responses, minimal analysis",
-            "Balanced": "⚖️ Balanced speed and quality",
-            "Thorough": "🔍 Comprehensive analysis"
-        }
-        st.caption(mode_descriptions[selected_mode])
-        
-        # Streaming toggle
-        st.session_state.use_streaming = st.checkbox(
-            "Enable Streaming",
-            value=st.session_state.get('use_streaming', True),
-            key="streaming_toggle",
-            help="Show live thinking process while generating SQL"
-        )
-        
-        st.divider()
         
         st.header("📁 Data Browser")
         
@@ -603,35 +590,64 @@ def main():
     col_chat, col_sql = st.columns([1, 1])
     
     with col_chat:
-        st.subheader("💬 Chat Helper")
+        # Chat Helper header with thinking pad toggle
+        col_header, col_toggle = st.columns([2, 1])
+        with col_header:
+            st.subheader("💬 Chat Helper")
+        with col_toggle:
+            # Initialize session state for thinking pad toggle
+            if "enable_thinking_pad" not in st.session_state:
+                st.session_state.enable_thinking_pad = False  # Default unchecked (Fast Mode)
+            
+            # Toggle checkbox for thinking pad mode
+            thinking_pad_enabled = st.checkbox(
+                "☑️ Enable LLM Thinking Pad",
+                value=st.session_state.enable_thinking_pad,
+                key="thinking_pad_toggle",
+                help="Enable detailed thinking process (slower) or keep fast mode (default)"
+            )
+            st.session_state.enable_thinking_pad = thinking_pad_enabled
         
-        # Natural language input
-        nl_query = st.text_area(
-            "Describe what you want to query:",
-            placeholder="Example: Show me total sales by month",
-            height=100,
-            key="nl_input"
-        )
+        # Check if data tables are loaded first
+        if not hasattr(st.session_state, 'registered_tables') or not st.session_state.registered_tables:
+            st.warning("⚠️ No data tables loaded. Please load CSV/Parquet files first in the 'Data Explorer' tab or use 'Auto-load sample data'.")
+        else:
+            # Natural language input
+            nl_query = st.text_area(
+                "Describe what you want to query:",
+                placeholder="Example: Show me total sales by month",
+                height=100,
+                key="nl_input"
+            )
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("Generate SQL →", type="primary", use_container_width=True):
+                    if nl_query:
+                        with st.spinner("Generating SQL..."):
+                            try:
+                                # TEMPORARY: Force disable streaming to avoid DOM errors
+                                use_streaming = False  # st.session_state.get('use_streaming', False)
+                                # Pass thinking pad mode to generation function
+                                generated_sql = generate_sql_from_natural_language(
+                                    nl_query, 
+                                    use_streaming, 
+                                    thinking_mode=st.session_state.enable_thinking_pad
+                                )
+                                if generated_sql:
+                                    st.session_state.current_sql = generated_sql
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error generating SQL: {str(e)}")
+                                # Don't rerun on error to prevent white screen
+            
+            with col_btn2:
+                if st.button("Clear", use_container_width=True):
+                    st.session_state.current_sql = ""
+                    st.rerun()
         
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("Generate SQL →", type="primary", use_container_width=True):
-                if nl_query:
-                    with st.spinner("Generating SQL..."):
-                        # Check if streaming is enabled in sidebar
-                        use_streaming = st.session_state.get('use_streaming', False)
-                        generated_sql = generate_sql_from_natural_language(nl_query, use_streaming)
-                        if generated_sql:
-                            st.session_state.current_sql = generated_sql
-                            st.rerun()
-        
-        with col_btn2:
-            if st.button("Clear", use_container_width=True):
-                st.session_state.current_sql = ""
-                st.rerun()
-        
-        # Show enhanced thinking pad
-        if st.session_state.current_sql:
+        # Show enhanced thinking pad (only if enabled)
+        if st.session_state.current_sql and st.session_state.enable_thinking_pad:
             st.markdown("---")
             st.markdown("🤖 **LLM Thinking Pad:**")
             
@@ -664,6 +680,10 @@ def main():
                         st.caption(f"Generation time: {explanation['generation_time']:.2f}s")
                 else:
                     st.info("💭 LLM will show its thinking process here when generating SQL...")
+        elif st.session_state.current_sql and not st.session_state.enable_thinking_pad:
+            # Fast mode - show brief status only
+            st.markdown("---")
+            st.success("🚀 **Fast Mode** - SQL generated quickly without detailed thinking process")
     
     with col_sql:
         st.subheader("📝 SQL Editor")

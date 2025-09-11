@@ -160,10 +160,7 @@ class EnhancedThinkingPad:
             with st.expander("💭 Thinking Process", expanded=True):
                 st.markdown(thinking_process)
             
-            # Display SQL
-            if sql:
-                with st.expander("📝 Generated SQL", expanded=False):
-                    st.code(sql, language="sql")
+            # SQL is already displayed in the main SQL editor, no need to duplicate it here
             
             # Confidence meter
             if confidence > 0:

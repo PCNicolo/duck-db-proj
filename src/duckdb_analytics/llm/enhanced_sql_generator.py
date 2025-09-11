@@ -11,10 +11,15 @@ from .config import (
     FEEDBACK_TIMEOUT,
     LM_STUDIO_URL,
     MAX_TOKENS,
+    MAX_TOKENS_FAST_MODE,
+    MAX_TOKENS_DETAILED_MODE,
     MODEL_NAME,
     REQUEST_TIMEOUT,
+    REQUEST_TIMEOUT_DETAILED,
     SCHEMA_WARM_ON_STARTUP,
     SQL_SYSTEM_PROMPT,
+    SQL_FAST_MODE_PROMPT,
+    SQL_DETAILED_MODE_PROMPT,
     TEMPERATURE,
 )
 from .optimized_context_manager import OptimizedContextManager
@@ -55,7 +60,7 @@ class EnhancedSQLGenerator:
         self.client = OpenAI(
             base_url=base_url,
             api_key="not-needed",
-            timeout=REQUEST_TIMEOUT
+            timeout=REQUEST_TIMEOUT_DETAILED  # Use longer timeout to handle detailed mode
         )
         
         # Initialize optimized components
@@ -146,7 +151,8 @@ class EnhancedSQLGenerator:
         context_level: str = DEFAULT_CONTEXT_LEVEL,
         use_cache: bool = True,
         validate: bool = True,
-        return_metrics: bool = False
+        return_metrics: bool = False,
+        thinking_mode: bool = False
     ) -> Tuple[Optional[str], Dict]:
         """
         Generate SQL from natural language with optimizations.
@@ -198,12 +204,28 @@ class EnhancedSQLGenerator:
         
         # Build optimized context
         self.metrics.start_operation("context_building")
+        
+        # Choose prompt based on thinking mode
+        if thinking_mode:
+            base_prompt = SQL_DETAILED_MODE_PROMPT
+            max_tokens = MAX_TOKENS_DETAILED_MODE
+        else:
+            base_prompt = SQL_FAST_MODE_PROMPT
+            max_tokens = MAX_TOKENS_FAST_MODE
+        
         prompt, context_metadata = self.context_manager.build_optimized_context(
             query=natural_language_query,
             schema=schema,
-            base_prompt=SQL_SYSTEM_PROMPT,
+            base_prompt=base_prompt,
             context_level=context_level
         )
+        
+        # Debug logging for thinking mode
+        if thinking_mode:
+            logger.info(f"DETAILED MODE ACTIVE - Using {len(base_prompt)} char prompt")
+            logger.info(f"Base prompt starts with: {base_prompt[:100]}...")
+        else:
+            logger.info(f"FAST MODE ACTIVE - Using {len(base_prompt)} char prompt")
         self.metrics.end_operation("context_building")
         
         metadata.update(context_metadata)
@@ -225,16 +247,25 @@ class EnhancedSQLGenerator:
                             {"role": "system", "content": prompt},
                             {"role": "user", "content": natural_language_query}
                         ],
-                        max_tokens=MAX_TOKENS,
+                        max_tokens=max_tokens,
                         temperature=TEMPERATURE,
                         stream=False,
-                        timeout=REQUEST_TIMEOUT  # Use configured timeout
+                        timeout=REQUEST_TIMEOUT_DETAILED if thinking_mode else REQUEST_TIMEOUT
                     )
                     
-                    sql_query = response.choices[0].message.content.strip()
+                    sql_response = response.choices[0].message.content.strip()
                     
-                    # Clean up the SQL
-                    sql_query = self._clean_sql_output(sql_query)
+                    # Parse response based on thinking mode
+                    if thinking_mode:
+                        sql_query, thinking_process = self._parse_detailed_response(sql_response)
+                        # Store thinking process in metadata for display
+                        metadata["detailed_thinking"] = thinking_process
+                        logger.info(f"Detailed mode - raw response length: {len(sql_response)}")
+                        logger.info(f"Detailed mode - thinking process length: {len(thinking_process)}")
+                        logger.info(f"Detailed mode - SQL extracted: {sql_query[:100]}...")
+                    else:
+                        sql_query = self._clean_sql_output(sql_response)
+                        metadata["detailed_thinking"] = None
                     
                     break  # Success, exit retry loop
                     
@@ -287,7 +318,8 @@ class EnhancedSQLGenerator:
         natural_language_query: str,
         context_level: str = DEFAULT_CONTEXT_LEVEL,
         return_metrics: bool = False,
-        include_llm_feedback: bool = True
+        include_llm_feedback: bool = True,
+        thinking_mode: bool = False
     ) -> Tuple[Optional[str], Dict]:
         """
         Generate SQL with enhanced explanation and LLM feedback.
@@ -305,7 +337,8 @@ class EnhancedSQLGenerator:
         sql_query, metadata = self.generate_sql(
             natural_language_query,
             context_level=context_level,
-            return_metrics=return_metrics
+            return_metrics=return_metrics,
+            thinking_mode=thinking_mode
         )
         
         if not sql_query:
@@ -409,6 +442,141 @@ class EnhancedSQLGenerator:
         
         return sql
     
+    def _generate_fallback_sql(self, natural_language_query: str) -> str:
+        """Generate SQL when detailed response didn't include SQL section."""
+        try:
+            # Get optimized schema
+            schema = self.schema_extractor.extract_schema_optimized()
+            
+            # Use fast mode prompt for focused SQL generation
+            prompt, _ = self.context_manager.build_optimized_context(
+                query=natural_language_query,
+                schema=schema,
+                base_prompt=SQL_FAST_MODE_PROMPT,
+                context_level="minimal"
+            )
+            
+            # Make a focused call with lower token limit
+            response = self.llm_client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+                max_tokens=800,  # Lower token limit for focused SQL
+                timeout=REQUEST_TIMEOUT
+            )
+            
+            if response and response.choices:
+                sql_response = response.choices[0].message.content.strip()
+                return self._clean_sql_output(sql_response)
+            else:
+                logger.warning("No response from fallback SQL generation")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Fallback SQL generation failed: {e}")
+            return None
+    
+    def _parse_detailed_response(self, response: str) -> Tuple[str, str]:
+        """Parse detailed mode response to extract SQL and thinking process."""
+        try:
+            logger.info(f"Parsing detailed response (first 200 chars): {response[:200]}...")
+            
+            # Look for SQL section in multiple ways
+            sql_markers = ["SQL:", "```sql", "**SQL:**", "SELECT", "WITH", "INSERT", "UPDATE", "DELETE"]
+            sql_start = -1
+            
+            for marker in sql_markers:
+                pos = response.find(marker)
+                if pos != -1:
+                    sql_start = pos
+                    break
+            
+            if sql_start != -1:
+                # Extract thinking process (everything before SQL)
+                thinking_process = response[:sql_start].strip()
+                
+                # Extract SQL query
+                sql_part = response[sql_start:]
+                
+                # Clean up SQL part based on what we found
+                if "```sql" in sql_part:
+                    sql_start_code = sql_part.find("```sql") + 6
+                    sql_end_code = sql_part.find("```", sql_start_code)
+                    if sql_end_code != -1:
+                        sql_query = sql_part[sql_start_code:sql_end_code].strip()
+                    else:
+                        sql_query = sql_part[sql_start_code:].strip()
+                elif "SQL:" in sql_part:
+                    sql_query = sql_part.replace("SQL:", "").strip()
+                else:
+                    # Just take everything after the marker
+                    sql_query = sql_part.strip()
+                
+                # Clean the extracted SQL
+                sql_query = self._clean_sql_output(sql_query)
+                
+                logger.info(f"Extracted thinking process length: {len(thinking_process)}")
+                logger.info(f"Extracted SQL: {sql_query}")
+                
+                # If we didn't get much thinking process, use the whole response as thinking
+                if len(thinking_process.strip()) < 100:
+                    logger.warning("Short thinking process, using full response as thinking")
+                    thinking_process = response
+                
+                return sql_query, thinking_process
+            else:
+                # No clear SQL marker found - check for detailed response markers
+                detailed_markers = ["🎯 STRATEGY:", "📊 BUSINESS CONTEXT:", "🔍 SCHEMA DECISIONS:", "✅ IMPLEMENTATION:"]
+                marker_count = sum(1 for marker in detailed_markers if marker in response)
+                
+                if marker_count >= 2:
+                    # This looks like a detailed response, try to extract SQL from lines
+                    logger.info(f"Found {marker_count} detailed markers, treating as structured response")
+                    lines = response.split('\n')
+                    sql_lines = []
+                    found_sql = False
+                    
+                    for line in lines:
+                        if line.strip().upper().startswith(('SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE')):
+                            found_sql = True
+                        if found_sql:
+                            sql_lines.append(line)
+                    
+                    if sql_lines:
+                        sql_query = '\n'.join(sql_lines)
+                        sql_query = self._clean_sql_output(sql_query)
+                        thinking_process = response.replace('\n'.join(sql_lines), '').strip()
+                        return sql_query, thinking_process
+                    else:
+                        # No SQL found in detailed response - this is a partial response
+                        # Log this as a token limit issue and make another call for just SQL
+                        logger.warning(f"Detailed response has no SQL - likely token limit reached. Response length: {len(response)}")
+                        logger.info("Making fallback call for SQL generation...")
+                        
+                        # Try to extract the original query from the thinking to make a focused SQL call
+                        try:
+                            # Make a quick SQL-only call
+                            fallback_sql = self._generate_fallback_sql(natural_language_query)
+                            if fallback_sql:
+                                logger.info(f"Successfully generated fallback SQL: {fallback_sql[:100]}...")
+                                return fallback_sql, response
+                            else:
+                                logger.warning("Fallback SQL generation failed")
+                                return "SELECT 1;", response
+                        except Exception as e:
+                            logger.error(f"Fallback SQL generation error: {e}")
+                            return "SELECT 1;", response
+                else:
+                    # Not a detailed response
+                    if len(response.strip()) > 100:
+                        return self._clean_sql_output(response), response
+                    else:
+                        return self._clean_sql_output(response), "Quick SQL generation without detailed analysis"
+                
+        except Exception as e:
+            logger.warning(f"Failed to parse detailed response: {e}")
+            return self._clean_sql_output(response), f"Response parsing failed: {response[:200]}..."
+
     def _validate_sql(self, sql: str, schema: Dict) -> Tuple[bool, list]:
         """Validate SQL against schema."""
         errors = []
