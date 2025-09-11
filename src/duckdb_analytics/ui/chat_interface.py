@@ -15,6 +15,11 @@ class ChatInterface:
         """Render the chat interface."""
         st.markdown("### 💬 Chat Helper")
         
+        # Check if data tables are loaded first
+        if not hasattr(st.session_state, 'registered_tables') or not st.session_state.registered_tables:
+            st.warning("⚠️ No data tables loaded. Please load CSV/Parquet files first in the 'Data Explorer' tab.")
+            return None
+        
         # Check LM Studio availability
         if not self.sql_generator.is_available():
             st.warning("⚠️ LM Studio is not connected. Please ensure it's running on localhost:1234")

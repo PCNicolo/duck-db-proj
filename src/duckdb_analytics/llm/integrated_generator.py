@@ -223,15 +223,27 @@ class IntegratedSQLGenerator:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             
-            # Run streaming generation
-            result = loop.run_until_complete(
-                self._async_streaming_generate(
-                    query,
-                    schema,
-                    profile,
-                    stream_callback
+            # Run streaming generation with proper task cleanup
+            try:
+                result = loop.run_until_complete(
+                    self._async_streaming_generate(
+                        query,
+                        schema,
+                        profile,
+                        stream_callback
+                    )
                 )
-            )
+            finally:
+                # Cancel any remaining tasks to prevent warnings
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                # Wait for tasks to be cancelled
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
             
             return result
             

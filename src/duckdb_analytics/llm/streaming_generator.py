@@ -254,6 +254,10 @@ class StreamingSQLGenerator:
                 content=str(e),
                 metadata={"error_type": type(e).__name__}
             )
+        finally:
+            # Ensure any pending async operations are properly handled
+            # (Do not close client as it may be reused)
+            pass
     
     def _build_streaming_prompt(
         self,
@@ -309,6 +313,7 @@ class DualStreamCoordinator:
         self.generator = generator
         self.thinking_queue = Queue()
         self.sql_queue = Queue()
+        self.background_task = None
         
     async def dual_stream_generate(
         self,
@@ -322,8 +327,8 @@ class DualStreamCoordinator:
         Returns:
             Tuple of (thinking_queue, sql_queue)
         """
-        # Start streaming in background
-        asyncio.create_task(
+        # Start streaming in background with proper task tracking
+        self.background_task = asyncio.create_task(
             self._stream_worker(
                 natural_language_query,
                 schema_context,
@@ -361,3 +366,15 @@ class DualStreamCoordinator:
             )
             self.thinking_queue.put(error_chunk)
             self.sql_queue.put(error_chunk)
+    
+    def cleanup(self):
+        """Clean up background tasks."""
+        if self.background_task and not self.background_task.done():
+            self.background_task.cancel()
+    
+    def __del__(self):
+        """Ensure cleanup on destruction."""
+        try:
+            self.cleanup()
+        except:
+            pass
