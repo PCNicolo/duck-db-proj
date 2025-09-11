@@ -7,45 +7,64 @@ from typing import Any, Dict, List, Optional
 
 import duckdb
 
+# Import connection pool for optimized performance
+try:
+    from .connection_pool import get_pool, DuckDBConnectionPool
+    POOL_AVAILABLE = True
+except ImportError:
+    POOL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
 class DuckDBConnection:
     """Manages DuckDB database connections and configurations."""
 
-    def __init__(self, database: Optional[str] = None, read_only: bool = False, enable_cache: bool = False):
+    def __init__(self, database: Optional[str] = None, read_only: bool = False, enable_cache: bool = False, use_pool: bool = False):
         """
-        Initialize DuckDB connection with caching support.
+        Initialize DuckDB connection with caching and pooling support.
 
         Args:
             database: Path to database file. None for in-memory database.
             read_only: Whether to open database in read-only mode.
             enable_cache: Whether to enable query result caching.
+            use_pool: Whether to use connection pooling.
         """
         self.database = database or ":memory:"
         self.read_only = read_only
         self._connection: Optional[duckdb.DuckDBPyConnection] = None
         self._config = self._get_default_config()
         
+        # Connection pooling
+        self.use_pool = use_pool and POOL_AVAILABLE and not read_only
+        self._pool: Optional[DuckDBConnectionPool] = None
+        if self.use_pool:
+            try:
+                self._pool = get_pool(database=self.database, max_connections=5)
+                logger.info("Using connection pool for better performance")
+            except Exception as e:
+                logger.warning(f"Failed to initialize pool: {e}, falling back to single connection")
+                self.use_pool = False
+        
         # Query result cache
         self.enable_cache = enable_cache
         self._query_cache = {}
-        self._cache_max_size = 50  # Maximum cached queries
-        self._cache_ttl = 300  # Cache TTL in seconds (5 minutes)
+        self._cache_max_size = 100  # Increased cache size
+        self._cache_ttl = 60  # Reduced TTL to 1 minute for faster iteration
         self._cache_timestamps = {}
 
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get optimized DuckDB configuration for performance."""
+        """Get optimized DuckDB configuration for M1 Pro performance."""
         import multiprocessing
         
-        # Auto-detect optimal thread count
+        # Auto-detect optimal thread count - M1 Pro has 8-10 cores
         cpu_count = multiprocessing.cpu_count()
-        optimal_threads = min(cpu_count, 8)  # Cap at 8 for stability
+        optimal_threads = min(cpu_count, 4)  # Reduced for M1 efficiency
         
         return {
             "threads": optimal_threads,
-            "memory_limit": "8GB",  # Increased for better performance
-            "max_memory": "8GB",
+            "memory_limit": "2GB",  # Optimized for 16GB M1 system
+            "max_memory": "2GB",
             "temp_directory": "/tmp/duckdb_temp",
             "enable_object_cache": True,
             "enable_http_metadata_cache": True,
@@ -53,8 +72,7 @@ class DuckDBConnection:
 
             "checkpoint_threshold": "256MB",
             "wal_autocheckpoint": "256MB",
-            "force_compression": "auto",  # Auto compression for better I/O
-            "preserve_insertion_order": False,  # Better performance
+            "preserve_insertion_order": False  # Better performance
 
         }
 
@@ -92,7 +110,7 @@ class DuckDBConnection:
 
     def execute(self, query: str, params: Optional[List[Any]] = None) -> Any:
         """
-        Execute a SQL query with caching support.
+        Execute a SQL query with caching and pooling support.
 
         Args:
             query: SQL query string
@@ -123,6 +141,19 @@ class DuckDBConnection:
                     del self._query_cache[cache_key]
                     del self._cache_timestamps[cache_key]
         
+        # Use connection pool if available (currently disabled)
+        if self.use_pool and self._pool:
+            try:
+                result = self._pool.execute(query, params)
+                # Cache the result if applicable
+                if cache_key and self.enable_cache:
+                    self._cache_timestamps[cache_key] = time.time()
+                    self._query_cache[cache_key] = result
+                return result
+            except Exception as e:
+                logger.warning(f"Pool execution failed: {e}, falling back to direct connection")
+                # Fall through to regular connection
+        
         conn = self.connect()
         try:
             if params:
@@ -130,18 +161,10 @@ class DuckDBConnection:
             else:
                 result = conn.execute(query)
             
-            # Cache the result if applicable (don't cache result objects, cache the data)
+            # Simple caching - only cache SELECT query results
             if cache_key and self.enable_cache:
-                # For caching, we need to fetch all data first
+                # Store result for future use (but don't interfere with current execution)
                 try:
-                    # Fetch all data from result to cache it
-                    all_data = result.fetchall()
-                    # Create a new result-like object that can be cached
-                    cached_data = {
-                        'data': all_data,
-                        'description': result.description if hasattr(result, 'description') else None
-                    }
-                    
                     # Manage cache size
                     if len(self._query_cache) >= self._cache_max_size:
                         # Remove oldest entry
@@ -149,14 +172,11 @@ class DuckDBConnection:
                         del self._query_cache[oldest_key]
                         del self._cache_timestamps[oldest_key]
                     
-                    self._query_cache[cache_key] = cached_data
+                    # Store the result object directly
+                    self._query_cache[cache_key] = result
                     self._cache_timestamps[cache_key] = time.time()
-                    
-                    # Return a new result with the fetched data
-                    # We need to re-execute to get a fresh result object
-                    result = conn.execute(query)
-                except:
-                    # If caching fails, just return the original result
+                except Exception:
+                    # If caching fails, just continue
                     pass
             
             return result
@@ -244,10 +264,17 @@ class DuckDBConnection:
 
         # Get column information
         result = self.execute(f"DESCRIBE {safe_table_name}")
-        info["columns"] = [
-            {"name": row[0], "type": row[1], "null": row[2], "key": row[3]}
-            for row in result.fetchall()
-        ]
+        columns = []
+        for row in result.fetchall():
+            # DuckDB DESCRIBE returns variable columns, handle safely
+            col_info = {
+                "name": row[0] if len(row) > 0 else None,
+                "type": row[1] if len(row) > 1 else None,
+                "null": row[2] if len(row) > 2 else None,
+                "key": row[3] if len(row) > 3 else None
+            }
+            columns.append(col_info)
+        info["columns"] = columns
 
         # Get row count
         result = self.execute(f"SELECT COUNT(*) FROM {safe_table_name}")

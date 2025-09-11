@@ -39,13 +39,13 @@ if "db_connection" not in st.session_state:
     # Use optimized connection with better config
     conn = DuckDBConnection()
     conn._config.update({
-        "threads": 8,  # Increase thread count for better parallelism
-        "memory_limit": "8GB",  # Increase memory for complex queries
-        "max_memory": "8GB",
+        "threads": 4,  # Optimized for M1 Pro efficiency cores
+        "memory_limit": "2GB",  # Conservative for 16GB M1 system
+        "max_memory": "2GB",
         "enable_object_cache": True,
         "enable_http_metadata_cache": True,
-
-
+        "checkpoint_threshold": "128MB",  # Smaller for faster checkpoints
+        "preserve_insertion_order": False  # Better performance
     })
     st.session_state.db_connection = conn
     st.session_state.db_connection.connect()
@@ -61,7 +61,7 @@ if "sql_generator" not in st.session_state:
     st.session_state.sql_generator = EnhancedSQLGenerator(
         duckdb_conn=st.session_state.db_connection.connect(),
         base_url="http://localhost:1234/v1",
-        warm_cache=False
+        warm_cache=False  # Disabled for faster startup
     )
 
 if "chart_recommender" not in st.session_state:
@@ -103,6 +103,21 @@ def monitor_performance(func):
         return result
     return wrapper
 
+@st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
+def get_cached_schema():
+    """Get cached schema extraction for better performance."""
+    if hasattr(st.session_state, 'schema_extractor'):
+        try:
+            # Try the optimized extraction method if available
+            if hasattr(st.session_state.schema_extractor, 'extract_schema_optimized'):
+                return st.session_state.schema_extractor.extract_schema_optimized()
+            else:
+                return st.session_state.schema_extractor.get_schema()
+        except Exception as e:
+            logger.error(f"Failed to extract schema: {e}")
+            return {}
+    return {}
+
 def load_all_data_files():
     """Automatically load all CSV and Parquet files from the data directory."""
     import os
@@ -135,14 +150,23 @@ def load_all_data_files():
                     safe_table_name = f'"{table_name}"'
                     st.session_state.db_connection.register_parquet(file_path, table_name)
                     
-                    # Get table info with safe table name
-                    info = st.session_state.db_connection.get_table_info(table_name)
-                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {safe_table_name}").fetchone()[0]
+                    # Get row count directly
+                    try:
+                        result = st.session_state.db_connection.execute(f"SELECT COUNT(*) as cnt FROM {safe_table_name}")
+                        rows = result.fetchone()[0] if result else 0
+                        
+                        # Get column count
+                        result = st.session_state.db_connection.execute(f"DESCRIBE {safe_table_name}")
+                        columns = len(result.fetchall()) if result else 0
+                    except Exception as e:
+                        print(f"Error getting table info for {table_name}: {e}")
+                        rows = 0
+                        columns = 0
                     
                     loaded_table_info.append({
                         "name": table_name,
                         "rows": rows,
-                        "columns": len(info)
+                        "columns": columns
                     })
                     loaded_table_names.add(table_name)
                     loaded_count += 1
@@ -159,14 +183,23 @@ def load_all_data_files():
                     safe_table_name = f'"{table_name}"'
                     st.session_state.db_connection.register_csv(file_path, table_name)
                     
-                    # Get table info with safe table name
-                    info = st.session_state.db_connection.get_table_info(table_name)
-                    rows = st.session_state.db_connection.execute(f"SELECT COUNT(*) FROM {safe_table_name}").fetchone()[0]
+                    # Get row count directly
+                    try:
+                        result = st.session_state.db_connection.execute(f"SELECT COUNT(*) as cnt FROM {safe_table_name}")
+                        rows = result.fetchone()[0] if result else 0
+                        
+                        # Get column count
+                        result = st.session_state.db_connection.execute(f"DESCRIBE {safe_table_name}")
+                        columns = len(result.fetchall()) if result else 0
+                    except Exception as e:
+                        print(f"Error getting table info for {table_name}: {e}")
+                        rows = 0
+                        columns = 0
                     
                     loaded_table_info.append({
                         "name": table_name,
                         "rows": rows,
-                        "columns": len(info)
+                        "columns": columns
                     })
                     loaded_table_names.add(table_name)
                     loaded_count += 1
@@ -250,7 +283,7 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error loading file: {e}")
         return False
 
-@st.cache_data(ttl=600, show_spinner=False)  # Cache for 10 minutes
+@st.cache_data(ttl=60, show_spinner=False)  # Cache for 1 minute for faster iteration
 def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
     """Generate SQL from natural language using LM Studio with enhanced explanations and caching."""
     if not st.session_state.sql_generator.is_available():
@@ -262,8 +295,8 @@ def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
         # Generate SQL with enhanced explanation, but skip LLM feedback if it's slow
         sql, metadata = st.session_state.sql_generator.generate_sql_with_explanation(
             prompt,
-            include_llm_feedback=False,  # Disable for now to avoid timeouts
-            return_metrics=True
+            include_llm_feedback=False,  # Disabled for performance
+            return_metrics=False  # Disabled for speed
         )
         
         # Store the explanation in session state for display
@@ -276,7 +309,7 @@ def generate_sql_from_natural_language(prompt: str) -> Optional[str]:
         st.error(f"Error generating SQL: {e}")
         return None
 
-@st.cache_data(ttl=300, show_spinner=False)  # Cache query results for 5 minutes
+@st.cache_data(ttl=60, show_spinner=False)  # Cache query results for 1 minute
 def execute_query(sql: str) -> Optional[pd.DataFrame]:
     """Execute SQL query and return results as DataFrame with caching."""
     try:
@@ -296,19 +329,19 @@ def execute_query(sql: str) -> Optional[pd.DataFrame]:
                 "success": True
             }
             
-            # Request feedback with execution results
-            if hasattr(st.session_state.sql_generator, 'query_explainer'):
-                try:
-                    feedback = st.session_state.sql_generator.query_explainer.get_llm_feedback(
-                        sql_query=sql,
-                        natural_language_query=st.session_state.nl_query,
-                        execution_result={"summary": f"Query returned {len(result)} rows with columns: {', '.join(result.columns)}"}
-                    )
-                    if feedback:
-                        # Store feedback for future use
-                        st.session_state.last_execution_feedback = feedback
-                except Exception as e:
-                    logger.debug(f"Could not get execution feedback: {e}")
+            # Skip feedback for performance - commented out
+            # if hasattr(st.session_state.sql_generator, 'query_explainer'):
+            #     try:
+            #         feedback = st.session_state.sql_generator.query_explainer.get_llm_feedback(
+            #             sql_query=sql,
+            #             natural_language_query=st.session_state.nl_query,
+            #             execution_result={"summary": f"Query returned {len(result)} rows with columns: {', '.join(result.columns)}"}
+            #         )
+            #         if feedback:
+            #             # Store feedback for future use
+            #             st.session_state.last_execution_feedback = feedback
+            #     except Exception as e:
+            #         logger.debug(f"Could not get execution feedback: {e}")
         
         # Fixed: QueryEngine already returns a DataFrame, check properly
         if isinstance(result, pd.DataFrame) and not result.empty:
@@ -320,7 +353,7 @@ def execute_query(sql: str) -> Optional[pd.DataFrame]:
         st.error(f"Query error: {e}")
         return None
 
-@st.cache_data(ttl=300, show_spinner=False)  # Cache visualizations
+@st.cache_data(ttl=60, show_spinner=False)  # Cache visualizations
 def create_visualization(df: pd.DataFrame, chart_type: str = "auto"):
     """Create a visualization from the dataframe with caching."""
     if df.empty:

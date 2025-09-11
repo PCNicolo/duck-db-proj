@@ -5,9 +5,9 @@ LM_STUDIO_URL = "http://localhost:1234/v1"
 MODEL_NAME = "meta-llama-3.1-8b-instruct"  # Use the available model in LM Studio
 
 # Request settings
-REQUEST_TIMEOUT = 30.0  # Main SQL generation timeout (increased for complex queries)
-FEEDBACK_TIMEOUT = 3.0  # Optional LLM feedback timeout (short since it's non-critical)
-MAX_TOKENS = 500
+REQUEST_TIMEOUT = 5.0  # Reduced for faster response (was 30.0)
+FEEDBACK_TIMEOUT = 1.0  # Reduced feedback timeout (was 3.0)
+MAX_TOKENS = 2000
 TEMPERATURE = 0.1  # Low temperature for consistent SQL generation
 
 # Context window management
