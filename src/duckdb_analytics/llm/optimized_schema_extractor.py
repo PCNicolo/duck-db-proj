@@ -73,11 +73,19 @@ class OptimizedSchemaExtractor:
                                 WHEN COUNT(*) < 10000 THEN COUNT(*)
                                 ELSE 10000  -- Cap for performance
                             END as estimated_row_count
-                        FROM information_schema.tables
-                        WHERE table_schema = 'main'
+                        FROM (
+                            SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'
+                            UNION ALL
+                            SELECT table_name FROM information_schema.views WHERE table_schema = 'main'
+                        ) all_tables
                         GROUP BY table_name
                     ) t ON c.table_name = t.table_name
                     WHERE c.table_schema = 'main'
+                    AND c.table_name IN (
+                        SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'
+                        UNION ALL
+                        SELECT table_name FROM information_schema.views WHERE table_schema = 'main'
+                    )
                 ),
                 pk_info AS (
                     -- Attempt to identify primary keys through naming convention
@@ -92,6 +100,11 @@ class OptimizedSchemaExtractor:
                         OR column_name LIKE 'pk_%'
                     )
                     AND ordinal_position = 1
+                    AND table_name IN (
+                        SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'
+                        UNION ALL
+                        SELECT table_name FROM information_schema.views WHERE table_schema = 'main'
+                    )
                 )
                 SELECT 
                     ti.*,
