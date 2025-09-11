@@ -14,17 +14,14 @@ DuckDB Analytics Dashboard - A local data analytics platform built on DuckDB for
 streamlit run app.py
 
 # Quick start with existing data
-python startup.py
+python scripts/setup/startup.py
 
 # Generate sample data for testing
-python generate_sample_data.py
-
-# Run SQL generation tests
-python test_sql_generation.py
+python scripts/setup/generate_sample_data.py
 
 # Code formatting and linting
-black src/ --line-length 88
-ruff check src/ --fix
+black src/ tests/ --line-length 88
+ruff check src/ tests/ --fix
 
 # Type checking
 mypy src/
@@ -32,15 +29,36 @@ mypy src/
 
 ### Testing
 ```bash
-# Run all tests (when available)
+# Run all tests
 pytest tests/ -v
+
+# Run specific test categories
+pytest tests/unit/ -v          # Unit tests only
+pytest tests/integration/ -v   # Integration tests only
+pytest tests/e2e/ -v           # End-to-end tests only
 
 # Run with coverage
 pytest tests/ --cov=src/duckdb_analytics --cov-report=html
 
-# Test SQL generation specifically
-python test_sql_generation.py
+# Run specific test file
+pytest tests/unit/test_sql_generation.py -v
 ```
+
+## Project Organization
+
+### Directory Structure
+- `src/`: Source code (core application logic)
+- `tests/`: Test suite organized by type (unit/, integration/, e2e/, fixtures/)
+- `scripts/`: Utility scripts (setup/, maintenance/, dev/)
+- `docs/`: Documentation (architecture/, features/, performance/, development/, archive/)
+- `app.py`: Main Streamlit application entry point
+
+### Test Organization
+Tests are organized by type in the `tests/` directory:
+- `unit/`: Fast, isolated tests for individual components
+- `integration/`: Tests for component interactions and LLM integration
+- `e2e/`: End-to-end tests simulating user workflows
+- `fixtures/`: Shared test data and utilities
 
 ## Architecture & Code Structure
 
@@ -135,17 +153,31 @@ When modifying the Streamlit interface:
 - Use columns (`st.columns`) for responsive layouts
 - Cache expensive operations with `@st.cache_data`
 
+## LLM Thinking Pad Feature
+
+The application includes a toggleable "Thinking Pad" for SQL generation:
+- **Fast Mode (default)**: Quick SQL generation with minimal overhead (~800 tokens)
+- **Detailed Mode**: Comprehensive 4-section analysis showing query strategy, business context, schema decisions, and implementation reasoning (~2500 tokens)
+- Toggle persists during session via `st.session_state.enable_thinking_pad`
+- Optimized for Llama 3.1 8B and similar models
+
 ## Current Development Focus
 
-The codebase recently underwent performance optimization (see PERFORMANCE_OPTIMIZATION_COMPLETE.md) with:
-- Streamlined SQL generation with 66% latency reduction
-- Optimized schema extraction and caching
-- Connection pooling implementation
-- Query explanation as LLM "thinking" process
-- Improved error handling and timeout management
+### Recent Optimizations
+The codebase recently underwent major improvements:
+- **Performance**: 66% latency reduction in SQL generation (10s → 3.4s)
+- **Schema Caching**: One-time extraction with >95% cache hit rate
+- **Connection Pooling**: Efficient concurrent operation handling
+- **Thinking Pad**: Toggle between fast and detailed SQL generation modes
+- **Error Recovery**: Comprehensive error handling with graceful degradation
+
+### Code Quality Notes
+- **Duplicate Modules**: Some modules have both original and optimized versions (e.g., `schema_extractor.py` and `optimized_schema_extractor.py`). These are intentional for A/B testing and stability. See `docs/development/code-structure-analysis.md` for details.
+- **Performance Settings**: M1 Pro optimized with 4 threads, 2GB memory limit, 128MB checkpoint threshold
+- **Token Management**: Fast mode uses ~800 tokens, detailed mode uses ~2500 tokens
 
 When making changes, maintain these performance gains by:
 - Using cached schema when available
 - Avoiding redundant database queries
 - Implementing proper connection management
-- Using async operations where beneficial
+- Preserving both module versions until migration is complete
