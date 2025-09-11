@@ -12,3 +12,4 @@ markdown-tree-parser>=0.1.0
 streamlit-ace>=0.1.1
 streamlit-hotkey>=0.0.3
 sqlparse>=0.4.4
+pyyaml>=6.0.0
