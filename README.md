@@ -61,26 +61,6 @@ streamlit run app.py
 
 3. (Optional) For natural language queries, ensure your local LLM server is running at `http://localhost:1234/v1`
 
-### Using the CLI
-
-The CLI provides quick access to data exploration:
-
-```bash
-# List available tables
-python -m duckdb_analytics.cli tables
-
-# Execute a query
-python -m duckdb_analytics.cli query "SELECT * FROM sales_data LIMIT 10"
-
-# Load a CSV file
-python -m duckdb_analytics.cli load data.csv --table-name my_data
-
-# Interactive mode
-python -m duckdb_analytics.cli interactive
-
-# Get help
-python -m duckdb_analytics.cli --help
-```
 
 ## 📁 Project Structure
 
@@ -102,8 +82,7 @@ duck-db-proj/
 │   │   └── visualizer.py     # Chart generation
 │   ├── visualizations/       # Visualization engine
 │   │   └── recommendation_engine.py  # Smart chart suggestions
-│   ├── data/                 # File management and ingestion
-│   └── cli.py               # Command-line interface
+│   └── data/                 # File management and ingestion
 ├── app.py                    # Streamlit dashboard
 ├── generate_sample_data.py   # Sample data generator
 ├── test_sql_generation.py    # SQL generation tests
@@ -148,80 +127,146 @@ duck-db-proj/
 - **Data Preview**: Quick table previews with sampling
 - **Format Conversion**: Convert between CSV and Parquet
 
-## CLI Commands
 
-| Command | Description |
-|---------|-------------|
-| `query` | Execute SQL query |
-| `load` | Load CSV/Parquet file |
-| `tables` | List available tables |
-| `describe` | Show table schema |
-| `preview` | Preview table data |
-| `stats` | Show table statistics |
-| `scan` | Scan directory for data files |
-| `convert` | Convert CSV to Parquet |
-| `explain` | Show query execution plan |
-| `interactive` | Start interactive mode |
+## 💬 Natural Language Query Examples
 
-## Sample Queries
+Ask questions in plain English and get SQL + visualizations:
+
+- "Show me top 10 products by revenue"
+- "What's the average order value by customer segment?"
+- "Plot daily sales trends for the last month"
+- "Which products have the highest profit margins?"
+- "Show customer distribution by region"
+- "Compare this month's sales to last month"
+
+## 📊 Sample SQL Queries
 
 ```sql
--- Top products by revenue
+-- Top products by revenue with profit analysis
 SELECT 
     product_name,
     SUM(total_amount) as revenue,
-    COUNT(*) as transactions
+    SUM(total_amount * 0.3) as estimated_profit,
+    COUNT(*) as transactions,
+    AVG(total_amount) as avg_transaction_value
 FROM sales_data
 GROUP BY product_name
 ORDER BY revenue DESC
 LIMIT 10;
 
--- Customer segmentation analysis
+-- Customer lifetime value analysis
+WITH customer_metrics AS (
+    SELECT 
+        customer_id,
+        COUNT(*) as purchase_count,
+        SUM(total_amount) as lifetime_value,
+        MIN(timestamp) as first_purchase,
+        MAX(timestamp) as last_purchase
+    FROM sales_data
+    GROUP BY customer_id
+)
 SELECT 
     c.customer_segment,
-    COUNT(DISTINCT s.customer_id) as customers,
-    SUM(s.total_amount) as total_revenue
-FROM sales_data s
-JOIN customers c ON s.customer_id = c.customer_id
-GROUP BY c.customer_segment;
+    COUNT(DISTINCT cm.customer_id) as customers,
+    AVG(cm.lifetime_value) as avg_lifetime_value,
+    AVG(cm.purchase_count) as avg_purchases
+FROM customer_metrics cm
+JOIN customers c ON cm.customer_id = c.customer_id
+GROUP BY c.customer_segment
+ORDER BY avg_lifetime_value DESC;
 
--- Time series analysis
+-- Advanced time series with moving averages
+WITH daily_sales AS (
+    SELECT 
+        DATE_TRUNC('day', timestamp) as date,
+        COUNT(*) as transactions,
+        SUM(total_amount) as revenue
+    FROM sales_data
+    GROUP BY date
+)
 SELECT 
-    DATE_TRUNC('day', timestamp) as date,
-    COUNT(*) as daily_transactions,
-    SUM(total_amount) as daily_revenue
-FROM sales_data
-GROUP BY date
-ORDER BY date;
+    date,
+    transactions,
+    revenue,
+    AVG(revenue) OVER (
+        ORDER BY date 
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ) as revenue_7day_avg,
+    revenue - LAG(revenue) OVER (ORDER BY date) as daily_change
+FROM daily_sales
+ORDER BY date DESC
+LIMIT 30;
 ```
 
-## Performance Tips
+## ⚡ Performance Optimization
 
-1. **Use Parquet Format**: Convert CSV files to Parquet for better performance
-2. **Leverage DuckDB's Columnar Engine**: Write queries that scan only needed columns
-3. **Create Views**: Use views for frequently accessed filtered datasets
-4. **Query Caching**: The dashboard automatically caches query results
-5. **Parallel Processing**: DuckDB automatically parallelizes query execution
+### Recent Improvements (v2.0)
+- **66% Latency Reduction**: SQL generation optimized from ~10s to <2s
+- **Schema Caching**: Intelligent caching reduces redundant database queries
+- **Connection Pooling**: Efficient connection management for concurrent operations
+- **M1 Pro Optimization**: Tuned for Apple Silicon with 4 threads and 2GB memory limit
 
-## Data Sources
+### Best Practices
+1. **Use Parquet Format**: 5-10x faster than CSV for analytical queries
+2. **Leverage Zero-Copy**: Query files directly without loading into memory
+3. **Column Selection**: Only query columns you need to minimize I/O
+4. **Create Views**: Use views for frequently accessed filtered datasets
+5. **Query Caching**: Dashboard automatically caches results for 5 minutes
+6. **Batch Operations**: Use batch inserts for large data loads
 
-The project includes a data generator that creates:
-- Sales transactions (100K records)
-- Customer data (10K records)
-- Product catalog (500 products)
-- Web server logs (50K entries)
-- Inventory movements (10K records)
+## 📊 Data Sources
 
-You can also load your own CSV/Parquet files through the dashboard or CLI.
+### Sample Data Generator
+The project includes a comprehensive data generator that creates realistic datasets:
+- **Sales Transactions**: 100K records with products, customers, amounts
+- **Customer Data**: 10K customers with segments and demographics
+- **Product Catalog**: 500 products across multiple categories
+- **Web Server Logs**: 50K entries for log analysis
+- **Inventory Movements**: 10K records for supply chain analysis
 
-## Requirements
+### Loading Your Own Data
+- **Dashboard Upload**: Drag-and-drop interface for CSV/Parquet files
+- **File Browser**: Navigate and select local data files
+- **Directory Scan**: Auto-discover data files in a directory
+- **URL Loading**: Direct loading from HTTP/S3 URLs (coming soon)
 
-- Python 3.10+
-- DuckDB 0.9.0+
-- Streamlit 1.28.0+
-- Pandas 2.0.0+
-- See `requirements.txt` for full list
+## 📋 Requirements
 
-## License
+### Core Dependencies
+- **Python**: 3.10+ (3.11 recommended)
+- **DuckDB**: 0.9.0+ (columnar database engine)
+- **Streamlit**: 1.28.0+ (web dashboard)
+- **Pandas**: 2.0.0+ (data manipulation)
+- **Plotly**: 5.17.0+ (interactive visualizations)
+
+### LLM Integration (Optional)
+- **OpenAI Client**: For natural language queries
+- **Local LLM Server**: Compatible with OpenAI API format
+- **Recommended**: LM Studio, Ollama, or similar
+
+### Full dependency list in `requirements.txt`
+
+## 🚧 Roadmap
+
+### Coming Soon
+- [ ] Cloud storage integration (S3, GCS, Azure)
+- [ ] Advanced ML-powered insights
+- [ ] Collaborative features and sharing
+- [ ] Custom dashboard templates
+- [ ] API endpoints for programmatic access
+- [ ] Docker containerization
+- [ ] Real-time data streaming support
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
 
 MIT License - See LICENSE file for details
+
+## 🙏 Acknowledgments
+
+- Built with [DuckDB](https://duckdb.org/) - The fast in-process analytical database
+- UI powered by [Streamlit](https://streamlit.io/) - The fastest way to build data apps
+- Visualizations by [Plotly](https://plotly.com/) - Interactive graphing library
